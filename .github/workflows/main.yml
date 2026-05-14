@@ -17,25 +17,21 @@ jobs:
 
       - name: Full NPM Install
         run: |
-          # Installation complète sans restrictions de lockfile
-          npm install --no-package-lock[span_3](start_span)[span_3](end_span)
-          # Installation des outils d'assets
-          npm install -d @capacitor/assets[span_4](start_span)[span_4](end_span)
+          npm install --no-package-lock
+          npm install -D @capacitor/assets
 
       - name: Build Web Project
-        run: npm run build[span_5](start_span)[span_5](end_span)
+        run: npm run build
 
       - name: Generate App Icons
         run: |
-          # Création des icônes pour iOS
-          npx capacitor-assets generate --ios[span_6](start_span)[span_6](end_span)
+          npx capacitor-assets generate --ios
 
       - name: Capacitor Sync
         run: |
-          npx cap add ios || true[span_7](start_span)[span_7](end_span)
-          # Injection du dossier 'dist' (tes 40Mo+) dans Xcode
-          npx cap copy ios[span_8](start_span)[span_8](end_span)
-          npx cap sync ios[span_9](start_span)[span_9](end_span)
+          npx cap add ios || true
+          npx cap copy ios
+          npx cap sync ios
 
       - name: Build Native iOS (Unsigned)
         run: |
@@ -50,18 +46,18 @@ jobs:
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGN_IDENTITY="" \
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     clean build[span_10](start_span)[span_10](end_span)
+                     clean build
 
           mkdir -p Payload
-          cp -r build-output/Release-iphoneos/App.app Payload/[span_11](start_span)[span_11](end_span)
+          cp -r build-output/Release-iphoneos/App.app Payload/
           
           echo "Vérification du contenu final :"
-          du -sh Payload/App.app[span_12](start_span)[span_12](end_span)
+          du -sh Payload/App.app
           
-          zip -r ../../App-unsigned.ipa Payload[span_13](start_span)[span_13](end_span)
+          zip -r ../../App-unsigned.ipa Payload
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: full-project-ipa
-          path: App-unsigned.ipa[span_14](start_span)[span_14](end_span)
+          path: App-unsigned.ipa
