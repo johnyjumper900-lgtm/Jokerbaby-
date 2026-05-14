@@ -12,9 +12,11 @@ interface NormalizedPick {
 }
 
 function cleanJsonText(content: string) {
-  // Correction : Expression régulière sur une seule ligne pour éviter "Unterminated regular expression"
-  return content.replace(/^```(?:json)?/i, "").replace(/
-```$/i, "").trim();
+  // Utilisation de constructeurs RegExp pour éviter les erreurs de "Unterminated regular expression" dues aux sauts de ligne
+  const startPattern = new RegExp("^```(?:json)?", "i");
+  const endPattern = new RegExp("
+```$", "i");
+  return content.replace(startPattern, "").replace(endPattern, "").trim();
 }
 
 function splitTeams(match: string) {
@@ -94,8 +96,9 @@ export async function analyzeTicket(rawInput: unknown) {
     },
   ];
 
-  // Correction : Ajout de ); pour fermer correctement le push
-  if (dataUrl) userContent.push({ type: "image_url", image_url: { url: dataUrl } });
+  if (dataUrl) {
+    userContent.push({ type: "image_url", image_url: { url: dataUrl } });
+  }
 
   const aiResp = await fetch(LOVABLE_API_URL, {
     method: "POST",
