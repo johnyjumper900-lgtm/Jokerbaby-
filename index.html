@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FC d'Or" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="theme-color" content="#0a0a0f" />
+    <title>Magic</title>
+    <meta
+      name="description"
+      content="Football Club d'Or — analyse de matchs, paris valeur et coach IA pour les passionnés de football."
+    />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png" />
+    <style>
+      html, body, #root { height: 100%; margin: 0; background: #0a0a0f; }
+      #fcd-boot{position:fixed;inset:0;z-index:9999;background:#0a0a0f;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;transition:opacity .35s ease}
+      #fcd-boot.hide{opacity:0;pointer-events:none}
+      #fcd-boot img{width:120px;height:120px;border-radius:28px;box-shadow:0 0 60px rgba(255,200,0,.45);animation:fcdPulse 1.6s ease-in-out infinite}
+      #fcd-boot .ring{width:54px;height:54px;border-radius:50%;border:3px solid rgba(255,200,0,.18);border-top-color:#ffc800;animation:fcdSpin 1s linear infinite}
+      @keyframes fcdSpin{to{transform:rotate(360deg)}}
+      @keyframes fcdPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+    </style>
+  </head>
+  <body>
+    <div id="fcd-boot" aria-hidden="true">
+      <img src="icon-512.png" alt="" />
+      <div class="ring"></div>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
