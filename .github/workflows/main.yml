@@ -1,4 +1,4 @@
-name: Build iOS IPA (Full – Working)
+name: Build iOS IPA (iOS 18, Full Working)
 
 on:
   workflow_dispatch:
@@ -8,32 +8,24 @@ on:
 jobs:
   build-ios:
     runs-on: macos-14
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      - name: Install dependencies (without speech plugin to avoid iOS version conflicts)
+      - name: Install dependencies (without speech plugin to avoid extra constraints)
         run: |
           bun install
-          # Si vous voulez le micro, décommentez la ligne suivante et passez iOS à 18.0 plus bas
-          # bun add @capacitor-community/speech-recognition
           bun add @capacitor/browser
 
       - name: Build web app
         run: bun run build
 
-      - name: Detect build folder (dist or dist/client)
+      - name: Detect web folder
         id: detect
         run: |
           if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
@@ -45,103 +37,85 @@ jobs:
             exit 1
           fi
 
-      - name: Force analyzeTicket inclusion (avoid tree-shaking)
+      - name: Force analyzeTicket inclusion
         run: |
           WEB_DIR="${{ steps.detect.outputs.web_dir }}"
           if ! grep -r "analyzeTicket" "$WEB_DIR" --include="*.js" > /dev/null; then
-            echo '// Force inclusion of analyzeTicket' >> "$WEB_DIR/assets/force_analyze.js"
-            echo 'import "../../src/server-api/analyze-ticket";' >> "$WEB_DIR/assets/force_analyze.js"
+            echo 'import "../../src/server-api/analyze-ticket";' >> "$WEB_DIR/assets/force.js"
           fi
 
-      - name: Create Capacitor config (iOS 17 – stable)
+      - name: Create Capacitor config (iOS 18)
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
-
           const config: CapacitorConfig = {
             appId: 'com.jokerbaby.app',
             appName: 'Jokerbaby',
             webDir: '${{ steps.detect.outputs.web_dir }}',
-            ios: {
-              deploymentTarget: '17.0'
-            },
-            server: {
-              allowNavigation: [
-                "*.winamax.fr",
-                "*.winamax.com"
-              ]
-            }
+            ios: { deploymentTarget: '18.0' },
+            server: { allowNavigation: [ "*.winamax.fr", "*.winamax.com" ] }
           };
           export default config;
           EOF
 
-      - name: Clean and add iOS platform
+      - name: Add iOS platform (ignore initial pod failure)
         run: |
           rm -rf ios
-          npx cap add ios
+          npx cap add ios || true   # continue même si pod install échoue
 
-      - name: Force iOS 17.0 in Podfile and Xcode project
+      - name: Force iOS 18.0 in Podfile and Xcode project
         run: |
-          sed -i '' 's/platform :ios, .*/platform :ios, "17.0"/' ios/App/Podfile
-          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g' ios/App/App.xcodeproj/project.pbxproj
+          sed -i '' 's/platform :ios, .*/platform :ios, "18.0"/' ios/App/Podfile
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 18.0/g' ios/App/App.xcodeproj/project.pbxproj
 
-      - name: Copy web build and static assets (public folder)
+      - name: Manual pod install (now compatible)
+        run: |
+          cd ios/App
+          pod install --repo-update
+
+      - name: Copy web build and public assets
         run: |
           rm -rf ios/App/App/public
           mkdir -p ios/App/App/public
           cp -r ${{ steps.detect.outputs.web_dir }}/* ios/App/App/public/
-
           if [ -d "public" ]; then
             cp -rf public/* ios/App/App/public/ 2>/dev/null || true
           fi
 
-      - name: Copy PWA files (manifest, icons) to root
+      - name: Copy PWA files
         run: |
           cd ios/App/App/public
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
-            if [ -f "../../../../$f" ]; then
-              cp -f "../../../../$f" . 2>/dev/null || true
-            fi
+            [ -f "../../../../$f" ] && cp -f "../../../../$f" . || true
           done
 
-      - name: Restore index.html if overwritten
+      - name: Restore index.html if needed
         run: |
           cd ios/App/App/public
           if ! grep -q "assets/" index.html; then
             cp ${{ steps.detect.outputs.web_dir }}/index.html .
           fi
 
-      - name: Install CocoaPods
-        run: |
-          cd ios/App
-          pod install --repo-update
-
-      - name: Capacitor copy (finalise without pod install)
+      - name: Capacitor copy (no pod)
         run: npx cap copy ios
 
-      - name: Generate iOS icons (optional)
+      - name: Generate icons (optional)
         run: |
           mkdir -p assets
-          if [ -f "public/icon-512.png" ]; then
-            cp public/icon-512.png assets/icon.png
-          elif [ -f "icon-512.png" ]; then
-            cp icon-512.png assets/icon.png
-          fi
+          [ -f "public/icon-512.png" ] && cp public/icon-512.png assets/icon.png || true
           npm install -g @capacitor/assets
           npx capacitor-assets generate --ios || true
 
-      - name: Add permissions and relax ATS for Winamax
+      - name: Add permissions & ATS for Winamax
         run: |
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Camera required'" $PLIST 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Photos required'" $PLIST 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Microphone required'" $PLIST 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
 
-      - name: Build Xcode archive (unsigned)
+      - name: Build archive
         run: |
           cd ios
           rm -rf ~/Library/Developer/Xcode/DerivedData
@@ -154,13 +128,13 @@ jobs:
                      CODE_SIGNING_REQUIRED=NO \
                      archive
 
-      - name: Create IPA file
+      - name: Create IPA
         run: |
           mkdir -p Payload
           cp -R ios/App.xcarchive/Products/Applications/App.app Payload/
           zip -r app.ipa Payload
 
-      - name: Upload IPA as artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa-final
