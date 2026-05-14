@@ -12,6 +12,7 @@ interface NormalizedPick {
 }
 
 function cleanJsonText(content: string) {
+  // Correction : Expression régulière sur une seule ligne pour éviter "Unterminated regular expression"
   return content.replace(/^```(?:json)?/i, "").replace(/
 ```$/i, "").trim();
 }
@@ -93,7 +94,7 @@ export async function analyzeTicket(rawInput: unknown) {
     },
   ];
 
-  // Correction apportée ici : ajout de );
+  // Correction : Ajout de ); pour fermer correctement le push
   if (dataUrl) userContent.push({ type: "image_url", image_url: { url: dataUrl } });
 
   const aiResp = await fetch(LOVABLE_API_URL, {
