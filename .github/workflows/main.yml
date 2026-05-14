@@ -1,4 +1,4 @@
-name: Build iOS IPA (Stable Fixed)
+name: Build iOS IPA (Stable Fixed Final)
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       # --------------------------------------------------
-      # Node
+      # Setup Node
       # --------------------------------------------------
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -27,7 +27,7 @@ jobs:
           node-version: 20
 
       # --------------------------------------------------
-      # Bun
+      # Setup Bun
       # --------------------------------------------------
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
@@ -91,25 +91,27 @@ jobs:
           EOF
 
       # --------------------------------------------------
-      # Clean old iOS project
+      # Remove old iOS
       # --------------------------------------------------
       - name: Clean iOS
         run: rm -rf ios
 
       # --------------------------------------------------
-      # Add iOS WITHOUT auto pod install
+      # Add iOS platform with forced iOS 15
       # --------------------------------------------------
       - name: Add iOS platform
-        run: npx cap add ios --skip-dependency-update
+        env:
+          CAPACITOR_IOS_DEPLOYMENT_TARGET: 15.0
+        run: npx cap add ios
 
       # --------------------------------------------------
-      # Force iOS 15 in Podfile BEFORE pods
+      # Force Podfile iOS 15
       # --------------------------------------------------
       - name: Fix Podfile deployment target
         run: |
           PODFILE="ios/App/Podfile"
 
-          sed -i '' "s/platform :ios, .*/platform :ios, '15.0'/" "$PODFILE"
+          sed -i '' "s/platform :ios, .*/platform :ios, '15.0'/" "$PODFILE" || true
 
           echo "===== PODFILE ====="
           cat "$PODFILE"
@@ -131,7 +133,7 @@ jobs:
       # --------------------------------------------------
       # Add iOS permissions
       # --------------------------------------------------
-      - name: Add permissions
+      - name: Add iOS permissions
         run: |
           PLIST="ios/App/App/Info.plist"
 
@@ -143,7 +145,7 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST || true
 
       # --------------------------------------------------
-      # Copy build manually
+      # Copy web build
       # --------------------------------------------------
       - name: Copy web build
         run: |
@@ -185,7 +187,7 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent Payload ../app.ipa
 
       # --------------------------------------------------
-      # Upload artifact
+      # Upload IPA
       # --------------------------------------------------
       - name: Upload IPA
         uses: actions/upload-artifact@v4
