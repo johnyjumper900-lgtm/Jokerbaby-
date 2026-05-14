@@ -12,9 +12,8 @@ interface NormalizedPick {
 }
 
 function cleanJsonText(content: string) {
-  // Utilisation de constructeurs RegExp pour éviter les erreurs de "Unterminated regular expression" dues aux sauts de ligne
   const startPattern = new RegExp("^```(?:json)?", "i");
-  const endPattern = /\n```$/i;  // ✅ Correction : regex littérale avec \n
+  const endPattern = /\n```$/i;
   return content.replace(startPattern, "").replace(endPattern, "").trim();
 }
 
@@ -35,12 +34,7 @@ function toNumber(value: unknown) {
 
 function normalizeTicket(raw: Record<string, unknown>) {
   const root = (raw.ticket && typeof raw.ticket === "object" ? raw.ticket : raw) as Record<string, unknown>;
-  const source = Array.isArray(root.picks)
-    ? root.picks
-    : Array.isArray(root.selections)
-      ? root.selections
-      : [];
-
+  const source = Array.isArray(root.picks) ? root.picks : Array.isArray(root.selections) ? root.selections : [];
   const picks: NormalizedPick[] = source
     .map((item) => {
       const pick = (item ?? {}) as Record<string, unknown>;
@@ -58,7 +52,6 @@ function normalizeTicket(raw: Record<string, unknown>) {
       } satisfies NormalizedPick;
     })
     .filter((pick): pick is NormalizedPick => pick !== null);
-
   return {
     bookmaker: typeof root.bookmaker === "string" ? root.bookmaker : undefined,
     stake: toNumber(root.stake || root.mise),
@@ -74,51 +67,66 @@ const _analyzeTicketSchema = z.object({
 });
 
 export async function analyzeTicket(rawInput: unknown) {
-  const data = _analyzeTicketSchema.parse(rawInput);
-  const LOVABLE_API_KEY = (typeof localStorage !== "undefined" && localStorage.getItem("magic.gemini_key")) || "";
-  if (!LOVABLE_API_KEY) throw new Error("Aucune clé Gemini configurée (Paramètres)");
+  console.log("🚀 analyzeTicket called with", rawInput);
+  try {
+    const data = _analyzeTicketSchema.parse(rawInput);
+    console.log("✅ Input parsed");
+    
+    let LOVABLE_API_KEY = "";
+    if (typeof localStorage !== "undefined") {
+      LOVABLE_API_KEY = localStorage.getItem("magic.gemini_key") || "";
+      console.log("🔑 localStorage key present:", !!LOVABLE_API_KEY);
+    } else {
+      console.warn("localStorage not available");
+    }
+    if (!LOVABLE_API_KEY) throw new Error("Aucune clé Gemini configurée (Paramètres)");
 
-  const text = (data.text || "").trim();
-  const dataUrl = data.fileBase64 ? (data.fileBase64.startsWith("data:") ? data.fileBase64 : `data:${data.mimeType || "image/jpeg"};base64,${data.fileBase64}`) : "";
+    const text = (data.text || "").trim();
+    const dataUrl = data.fileBase64 ? (data.fileBase64.startsWith("data:") ? data.fileBase64 : `data:${data.mimeType || "image/jpeg"};base64,${data.fileBase64}`) : "";
+    if (!text && !dataUrl) throw new Error("Aucun ticket à lire");
+    console.log("📄 text length:", text.length, "hasImage:", !!dataUrl);
 
-  if (!text && !dataUrl) throw new Error("Aucun ticket à lire");
+    const userContent: Array<Record<string, unknown>> = [
+      {
+        type: "text",
+        text: "Lis le ticket de pari sportif fourni. ... Texte collé si présent:\n" + text,
+      },
+    ];
+    if (dataUrl) {
+      userContent.push({ type: "image_url", image_url: { url: dataUrl } });
+    }
 
-  const userContent: Array<Record<string, unknown>> = [
-    {
-      type: "text",
-      text:
-        "Lis le ticket de pari sportif fourni. Tu dois extraire tous les paris visibles, même si la photo est inclinée, sombre, partiellement floue ou contient plusieurs colonnes. " +
-        "Réponds uniquement avec ce JSON STRICT, sans markdown: " +
-        '{"bookmaker":string|null,"stake":number|null,"totalOdds":number|null,"picks":[{"match":string,"teamA":string,"teamB":string,"type":string,"option":string,"odds":number}]}. ' +
-        "Normalise les cotes en nombre décimal, sépare les équipes, et n'invente pas de pari invisible. Texte collé si présent:\n" +
-        text,
-    },
-  ];
-
-  if (dataUrl) {
-    userContent.push({ type: "image_url", image_url: { url: dataUrl } });
+    console.log("🌐 Calling Lovable API...");
+    const aiResp = await fetch(LOVABLE_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: dataUrl ? "google/gemini-2.5-flash" : "google/gemini-2.5-flash-lite",
+        messages: [
+          { role: "system", content: "Tu es un OCR expert de tickets de paris sportifs. Tu réponds uniquement en JSON valide." },
+          { role: "user", content: userContent }
+        ],
+        response_format: { type: "json_object" },
+      }),
+    });
+    console.log("📡 Response status:", aiResp.status);
+    if (!aiResp.ok) {
+      const errorText = await aiResp.text();
+      console.error("API error body:", errorText);
+      throw new Error(`Lecture IA impossible (${aiResp.status})`);
+    }
+    const aiJson = await aiResp.json();
+    const content = cleanJsonText(aiJson?.choices?.[0]?.message?.content || "{}");
+    console.log("📝 Cleaned content:", content.slice(0, 200));
+    const parsed = JSON.parse(content);
+    const result = normalizeTicket(parsed);
+    console.log("🎉 Success, result:", result);
+    return result;
+  } catch (err) {
+    console.error("❌ analyzeTicket error:", err);
+    throw err;
   }
-
-  const aiResp = await fetch(LOVABLE_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${LOVABLE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: dataUrl ? "google/gemini-2.5-flash" : "google/gemini-2.5-flash-lite",
-      messages: [
-        { role: "system", content: "Tu es un OCR expert de tickets de paris sportifs. Tu réponds uniquement en JSON valide." },
-        { role: "user", content: userContent }
-      ],
-      response_format: { type: "json_object" },
-    }),
-  });
-
-  if (!aiResp.ok) throw new Error(`Lecture IA impossible (${aiResp.status})`);
-
-  const aiJson = await aiResp.json();
-  const content = cleanJsonText(aiJson?.choices?.[0]?.message?.content || "{}");
-  const parsed = JSON.parse(content);
-  return normalizeTicket(parsed);
 }
