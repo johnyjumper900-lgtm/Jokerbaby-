@@ -1,4 +1,3 @@
-
 export interface WinaMatch {
   id: string;
   title: string;
@@ -77,6 +76,7 @@ async function fetchViaSocketIO(): Promise<Record<string, any>> {
   const r1 = await fetch(
     `${SIO_BASE}?EIO=4&transport=polling&t=${Date.now()}`,
     { headers: H() }
+  ); // Correction ici : ajout de );
 
   cap(r1);
   const t1 = await r1.text();
@@ -103,9 +103,7 @@ async function fetchViaSocketIO(): Promise<Record<string, any>> {
   await post("40");
   await poll();
 
-  // 3. Subscribe to live data routes (live + 7 jours suffit pour rester sous
-  // le budget temps du Worker — au-delà, le drain timeout et on renvoie vide).
-  // Aspiration 30 jours (720h) tout sport pour avoir l'offre complète du mois.
+  // 3. Subscribe
   const routes = [
     "hot:live",
     "hot:home",
@@ -122,19 +120,10 @@ async function fetchViaSocketIO(): Promise<Record<string, any>> {
 
   // 4. Drain pushes
   const merged: Record<string, any> = {
-    matches: {},
-    tournaments: {},
-    categories: {},
-    sports: {},
-    bets: {},
-    outcomes: {},
-    odds: {},
-    calendar: {},
-    home: {},
-    live: {},
+    matches: {}, tournaments: {}, categories: {}, sports: {},
+    bets: {}, outcomes: {}, odds: {}, calendar: {}, home: {}, live: {},
   };
   const rgx = /42(\[(?:[^[\]]|\[(?:[^[\]]|\[[^[\]]*\])*\])*\])/g;
-  // Drain borné dans le temps (Worker = budget CPU court).
   const drainStart = Date.now();
   for (let i = 0; i < 60 && Date.now() - drainStart < 18000; i++) {
     const t = await poll();
@@ -162,7 +151,6 @@ async function fetchViaSocketIO(): Promise<Record<string, any>> {
       } catch {}
     }
   }
-  // best-effort close
   fetch(`${SIO_BASE}?EIO=4&transport=polling&sid=${sid}`, {
     method: "POST",
     headers: { ...H(), "Content-Type": "text/plain;charset=UTF-8" },
@@ -224,18 +212,10 @@ function parseMatchesFromState(
       title: m.title,
       homeTeam: m.competitor1Name,
       awayTeam: m.competitor2Name,
-      homeLogo: m.competitor1Flag
-        ? `https://s.winamax.fr/i/icons/${m.competitor1Flag}.png`
-        : null,
-      awayLogo: m.competitor2Flag
-        ? `https://s.winamax.fr/i/icons/${m.competitor2Flag}.png`
-        : null,
-      homeJersey: m.competitor1Flag
-        ? `https://s.winamax.fr/i/jerseys/${m.competitor1Flag}.png`
-        : null,
-      awayJersey: m.competitor2Flag
-        ? `https://s.winamax.fr/i/jerseys/${m.competitor2Flag}.png`
-        : null,
+      homeLogo: m.competitor1Flag ? `https://s.winamax.fr/i/icons/${m.competitor1Flag}.png` : null,
+      awayLogo: m.competitor2Flag ? `https://s.winamax.fr/i/icons/${m.competitor2Flag}.png` : null,
+      homeJersey: m.competitor1Flag ? `https://s.winamax.fr/i/jerseys/${m.competitor1Flag}.png` : null,
+      awayJersey: m.competitor2Flag ? `https://s.winamax.fr/i/jerseys/${m.competitor2Flag}.png` : null,
       tournament: tName,
       category: cName,
       sportId: m.sportId,
@@ -251,7 +231,6 @@ function parseMatchesFromState(
 }
 
 import { supabase as supabaseAdmin } from "@/integrations/supabase/client";
-// NOTE: SPA build — using anon client. Cloud sync requires RLS policies that allow inserts.
 
 const hasSupabaseAdmin = () =>
   Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -259,17 +238,12 @@ const hasSupabaseAdmin = () =>
 let lastSyncTime = 0;
 
 async function syncToDatabase(matches: WinaMatch[]) {
-  if (!hasSupabaseAdmin()) return; // Cloud non connecté → on saute la persistance.
+  if (!hasSupabaseAdmin()) return;
   const now = Date.now();
-  if (now - lastSyncTime < 1000 * 60 * 2) {
-    // 2 minutes throttle
-    return;
-  }
+  if (now - lastSyncTime < 1000 * 60 * 2) return;
   lastSyncTime = now;
-
   const nowIso = new Date().toISOString();
 
-  // 1. Upsert matches (foot, tennis, basket, ...)
   const dbMatches = matches.map((m) => ({
     id: m.id,
     sport_id: m.sportId,
@@ -298,90 +272,69 @@ async function syncToDatabase(matches: WinaMatch[]) {
   for (let i = 0; i < dbMatches.length; i += 200) {
     const chunk = dbMatches.slice(i, i + 200) as never;
     try {
-      const { error } = await supabaseAdmin
-        .from("wina_matches" as never)
-        .upsert(chunk, { onConflict: "id" });
-      if (error) console.error("Failed to upsert wina_matches", error);
+      await supabaseAdmin.from("wina_matches" as never).upsert(chunk, { onConflict: "id" });
     } catch (err) {
       console.error("Failed to upsert wina_matches", err);
     }
   }
 
-  // 2. Sports counters
-  const sportRows = new Map<number, { id: number; name: string; count: number; updated_at: string }>();
-  const tournamentRows = new Map<string, { name: string; sport_id: number; count: number; updated_at: string }>();
+  const sportRows = new Map<number, any>();
+  const tournamentRows = new Map<string, any>();
   for (const m of matches) {
     const sCur = sportRows.get(m.sportId);
-    sportRows.set(m.sportId, {
-      id: m.sportId,
-      name: m.sportName,
-      count: (sCur?.count ?? 0) + 1,
-      updated_at: nowIso,
-    });
+    sportRows.set(m.sportId, { id: m.sportId, name: m.sportName, count: (sCur?.count ?? 0) + 1, updated_at: nowIso });
     const tCur = tournamentRows.get(m.tournament);
-    tournamentRows.set(m.tournament, {
-      name: m.tournament,
-      sport_id: m.sportId,
-      count: (tCur?.count ?? 0) + 1,
-      updated_at: nowIso,
-    });
+    tournamentRows.set(m.tournament, { name: m.tournament, sport_id: m.sportId, count: (tCur?.count ?? 0) + 1, updated_at: nowIso });
   }
   try {
-    if (sportRows.size) {
-      await (supabaseAdmin as never as { from: (t: string) => { upsert: (rows: unknown, opts: unknown) => Promise<unknown> } }).from("wina_sports").upsert(Array.from(sportRows.values()), { onConflict: "id" });
-    }
-    if (tournamentRows.size) {
-      await (supabaseAdmin as never as { from: (t: string) => { upsert: (rows: unknown, opts: unknown) => Promise<unknown> } }).from("wina_tournaments").upsert(Array.from(tournamentRows.values()), { onConflict: "name" });
-    }
+    if (sportRows.size) await (supabaseAdmin as any).from("wina_sports").upsert(Array.from(sportRows.values()), { onConflict: "id" });
+    if (tournamentRows.size) await (supabaseAdmin as any).from("wina_tournaments").upsert(Array.from(tournamentRows.values()), { onConflict: "name" });
   } catch (err) {
-    console.error("Failed to upsert wina_sports/wina_tournaments", err);
+    console.error("Failed to upsert sports/tournaments", err);
   }
 }
 
 export async function fetchWinamaxFootball(): Promise<WinaPayload> {
-    let data: Record<string, any> = {};
-    try {
-      data = await fetchViaSocketIO();
-    } catch (e) {
-      console.error("Winamax socket.io fetch failed:", e);
-    }
+  let data: Record<string, any> = {};
+  try {
+    data = await fetchViaSocketIO();
+  } catch (e) {
+    console.error("Winamax fetch failed:", e);
+  }
 
-    const sportsMap: Record<string, string> = {};
-    for (const k of Object.keys(data.sports || {})) {
-      if (data.sports[k]?.sportName) sportsMap[k] = data.sports[k].sportName;
-    }
-    const all = parseMatchesFromState(data, sportsMap);
+  const sportsMap: Record<string, string> = {};
+  for (const k of Object.keys(data.sports || {})) {
+    if (data.sports[k]?.sportName) sportsMap[k] = data.sports[k].sportName;
+  }
+  const all = parseMatchesFromState(data, sportsMap);
+  syncToDatabase(all).catch(console.error);
 
-    // Persistance Cloud (matchs + sports + tournois)
-    syncToDatabase(all).catch((err) => console.error("Sync error:", err));
+  let liveCount = 0;
+  const tCounts: Record<string, number> = {};
+  const sCounts: Record<number, { name: string; count: number }> = {};
+  for (const m of all) {
+    if (m.status === "live") liveCount++;
+    tCounts[m.tournament] = (tCounts[m.tournament] || 0) + 1;
+    const cur = sCounts[m.sportId];
+    sCounts[m.sportId] = { name: m.sportName, count: (cur?.count || 0) + 1 };
+  }
 
-    let liveCount = 0;
-    const tCounts: Record<string, number> = {};
-    const sCounts: Record<number, { name: string; count: number }> = {};
-    for (const m of all) {
-      if (m.status === "live") liveCount++;
-      tCounts[m.tournament] = (tCounts[m.tournament] || 0) + 1;
-      const cur = sCounts[m.sportId];
-      sCounts[m.sportId] = { name: m.sportName, count: (cur?.count || 0) + 1 };
-    }
+  all.sort((a, b) => {
+    if (a.status === "live" && b.status !== "live") return -1;
+    if (b.status === "live" && a.status !== "live") return 1;
+    return a.matchStart - b.matchStart;
+  });
 
-    all.sort((a, b) => {
-      if (a.status === "live" && b.status !== "live") return -1;
-      if (b.status === "live" && a.status !== "live") return 1;
-      return a.matchStart - b.matchStart;
-    });
-
-    return {
-      matches: all,
-      tournaments: Object.entries(tCounts)
-        .map(([name, count]) => ({ id: name, name, count }))
-        .sort((a, b) => b.count - a.count),
-      sports: Object.entries(sCounts)
-        .map(([id, v]) => ({ id: Number(id), name: v.name, count: v.count }))
-        .sort((a, b) => b.count - a.count),
-      fetchedAt: Date.now(),
-      totalCount: all.length,
-      liveCount,
-    };
-  },
-);
+  return {
+    matches: all,
+    tournaments: Object.entries(tCounts)
+      .map(([name, count]) => ({ id: name, name, count }))
+      .sort((a, b) => b.count - a.count),
+    sports: Object.entries(sCounts)
+      .map(([id, v]) => ({ id: Number(id), name: v.name, count: v.count }))
+      .sort((a, b) => b.count - a.count),
+    fetchedAt: Date.now(),
+    totalCount: all.length,
+    liveCount,
+  };
+}
