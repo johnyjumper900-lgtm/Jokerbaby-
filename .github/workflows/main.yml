@@ -1,109 +1,122 @@
-name: Build iOS IPA (Forced assets copy)
+name: Build iOS IPA
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
 
 jobs:
   build-ios:
-    runs-on: macos-latest
+    runs-on: macos-14
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
-      - uses: oven-sh/setup-bun@v1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
-      - run: bun install
-      - run: bun run build
 
-      - name: Detect web directory
-        id: webdir
+      - name: Install dependencies
+        run: bun install
+
+      # BUILD VITE
+      - name: Build web app
+        run: bun run build
+
+      # Vérifie le dossier build
+      - name: Detect build folder
+        id: detect
         run: |
-          if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
-            echo "web_dir=dist/client" >> $GITHUB_OUTPUT
-          elif [ -f "dist/index.html" ]; then
+          if [ -f "dist/index.html" ]; then
             echo "web_dir=dist" >> $GITHUB_OUTPUT
+          elif [ -f "dist/client/index.html" ]; then
+            echo "web_dir=dist/client" >> $GITHUB_OUTPUT
           else
-            echo "❌ No index.html found"
+            echo "❌ Aucun build trouvé"
             exit 1
           fi
 
-      - name: Add iOS platform (clean)
+      # Force le bon webDir
+      - name: Configure Capacitor
+        run: |
+          cat > capacitor.config.ts <<EOF
+          import type { CapacitorConfig } from '@capacitor/cli';
+
+          const config: CapacitorConfig = {
+            appId: 'com.jokerbaby.app',
+            appName: 'Jokerbaby',
+            webDir: '${{ steps.detect.outputs.web_dir }}',
+            bundledWebRuntime: false
+          };
+
+          export default config;
+          EOF
+
+      # Ajoute iOS proprement
+      - name: Add iOS
         run: |
           rm -rf ios
           npx cap add ios
-          npx cap config webDir ${{ steps.webdir.outputs.web_dir }}
 
-      # Copie du build web (fichiers critiques)
-      - name: Copy web build
-        run: |
-          rm -rf ios/App/App/public
-          mkdir -p ios/App/App/public
-          cp -r ${{ steps.webdir.outputs.web_dir }}/* ios/App/App/public/
-
-      # Copie FORCÉE de tout le dossier public/ (images, etc.) – sans exclure quoi que ce soit
-      - name: Copy static assets (public folder) recursively
-        run: |
-          if [ -d "public" ]; then
-            echo "📁 Copying public/ to ios/App/App/public/"
-            cp -rf public/* ios/App/App/public/
-          fi
-
-      # Copie des fichiers PWA (manifest, icônes) depuis la racine du projet
-      - name: Copy PWA files to root
-        run: |
-          cd ios/App/App/public
-          for file in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
-            if [ -f "../../../../$file" ]; then
-              cp -f "../../../../$file" .
-            fi
-          done
-
-      # RECOPIE DE SÉCURITÉ : s'assurer que index.html et les assets web ne sont pas écrasés
-      - name: Restore web files if overwritten
-        run: |
-          cd ios/App/App/public
-          # Recopie index.html depuis le build web d'origine si absent ou corrompu
-          if [ ! -f "index.html" ] || ! grep -q "assets/" index.html; then
-            echo "⚠️ index.html manquant ou invalide, recopie depuis le build"
-            cp ${{ steps.webdir.outputs.web_dir }}/index.html .
-          fi
-          # Recopie du dossier assets (bundles JS/CSS) s'il a été supprimé
-          if [ ! -d "assets" ] && [ -d "${{ steps.webdir.outputs.web_dir }}/assets" ]; then
-            cp -r ${{ steps.webdir.outputs.web_dir }}/assets .
-          fi
-
+      # Synchronise tout le projet web
       - name: Capacitor sync
         run: npx cap sync ios
 
-      - name: Build unsigned IPA
+      # COPIE TOTALE DU DOSSIER PUBLIC
+      - name: Copy public assets
+        run: |
+          if [ -d "public" ]; then
+            rsync -av public/ ios/App/App/public/
+          fi
+
+      # Vérifie les fichiers
+      - name: Verify iOS public folder
+        run: |
+          ls -la ios/App/App/public
+          test -f ios/App/App/public/index.html
+
+      # Build iOS
+      - name: Build iOS app
         run: |
           cd ios
-          rm -rf ~/Library/Developer/Xcode/DerivedData
-          xcodebuild -workspace App/App.xcworkspace \
-                     -scheme App \
-                     -configuration Release \
-                     -sdk iphoneos \
-                     CODE_SIGNING_ALLOWED=NO \
-                     CODE_SIGNING_REQUIRED=NO \
-                     CODE_SIGN_IDENTITY="" \
-                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     build
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "App.app" -path "*/Release-iphoneos/*" | head -1)
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ App.app not found"
-            exit 1
-          fi
-          mkdir -p Payload
-          cp -r "$APP_PATH" Payload/
-          zip -r ../App-unsigned.ipa Payload
-          cd ..
 
-      - uses: actions/upload-artifact@v4
+          rm -rf ~/Library/Developer/Xcode/DerivedData
+
+          xcodebuild \
+            -workspace App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath App.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            archive
+
+      # Création IPA
+      - name: Package IPA
+        run: |
+          cd ios
+
+          mkdir Payload
+
+          APP=$(find App.xcarchive -name "*.app" | head -1)
+
+          cp -R "$APP" Payload/App.app
+
+          ditto -c -k --sequesterRsrc --keepParent Payload ../Jokerbaby.ipa
+
+      # Upload IPA
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
-          name: ios-unsigned-app
-          path: App-unsigned.ipa
+          name: ios-ipa
+          path: Jokerbaby.ipa
           retention-days: 7
