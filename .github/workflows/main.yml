@@ -1,40 +1,24 @@
-name: Build iOS IPA (Full assets, no blank page)
+name: Build iOS IPA (Forced assets copy)
 
 on:
-  workflow_dispatch:          # Déclenchement manuel depuis l'interface GitHub
+  workflow_dispatch:
   push:
     branches: [ main, master ]
 
 jobs:
   build-ios:
     runs-on: macos-latest
-
     steps:
-      # 1. Récupération du code
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 2. Installation de Node.js (obligatoire pour Capacitor)
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      # 3. Installation de Bun (si vous l'utilisez pour le build web)
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
+      - run: bun install
+      - run: bun run build
 
-      # 4. Installation des dépendances avec Bun
-      - name: Install dependencies
-        run: bun install
-
-      # 5. Build web (produit dist/ ou dist/client)
-      - name: Build web app
-        run: bun run build
-
-      # 6. Détection du dossier web généré
       - name: Detect web directory
         id: webdir
         run: |
@@ -43,62 +27,62 @@ jobs:
           elif [ -f "dist/index.html" ]; then
             echo "web_dir=dist" >> $GITHUB_OUTPUT
           else
-            echo "❌ No index.html found in dist/ or dist/client/"
+            echo "❌ No index.html found"
             exit 1
           fi
 
-      # 7. Régénération propre de la plateforme iOS (supprime l'ancien dossier)
       - name: Add iOS platform (clean)
         run: |
           rm -rf ios
           npx cap add ios
           npx cap config webDir ${{ steps.webdir.outputs.web_dir }}
 
-      # 8. Copie du build web (fichiers essentiels)
-      - name: Copy web build to public
+      # Copie du build web (fichiers critiques)
+      - name: Copy web build
         run: |
           rm -rf ios/App/App/public
           mkdir -p ios/App/App/public
           cp -r ${{ steps.webdir.outputs.web_dir }}/* ios/App/App/public/
 
-      # 9. Copie des ressources statiques (dossier public/ de votre projet) – sans écraser
-      - name: Copy static assets (public folder)
+      # Copie FORCÉE de tout le dossier public/ (images, etc.) – sans exclure quoi que ce soit
+      - name: Copy static assets (public folder) recursively
         run: |
-          if [ -d "public" ] && [ "$(ls -A public)" ]; then
-            cp -rn public/* ios/App/App/public/ 2>/dev/null || true
-            echo "✅ Static assets copied from public/"
+          if [ -d "public" ]; then
+            echo "📁 Copying public/ to ios/App/App/public/"
+            cp -rf public/* ios/App/App/public/
           fi
 
-      # 10. Copie des fichiers PWA (manifest, icônes) à la racine de public
-      - name: Copy PWA files
+      # Copie des fichiers PWA (manifest, icônes) depuis la racine du projet
+      - name: Copy PWA files to root
         run: |
           cd ios/App/App/public
           for file in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
             if [ -f "../../../../$file" ]; then
-              cp -n "../../../../$file" . 2>/dev/null || true
+              cp -f "../../../../$file" .
             fi
           done
 
-      # 11. Vérification que index.html est bien présent
-      - name: Verify index.html
+      # RECOPIE DE SÉCURITÉ : s'assurer que index.html et les assets web ne sont pas écrasés
+      - name: Restore web files if overwritten
         run: |
-          if [ ! -f "ios/App/App/public/index.html" ]; then
-            echo "❌ index.html missing – build failed"
-            exit 1
+          cd ios/App/App/public
+          # Recopie index.html depuis le build web d'origine si absent ou corrompu
+          if [ ! -f "index.html" ] || ! grep -q "assets/" index.html; then
+            echo "⚠️ index.html manquant ou invalide, recopie depuis le build"
+            cp ${{ steps.webdir.outputs.web_dir }}/index.html .
           fi
-          echo "✅ index.html found"
+          # Recopie du dossier assets (bundles JS/CSS) s'il a été supprimé
+          if [ ! -d "assets" ] && [ -d "${{ steps.webdir.outputs.web_dir }}/assets" ]; then
+            cp -r ${{ steps.webdir.outputs.web_dir }}/assets .
+          fi
 
-      # 12. Synchronisation Capacitor (installe les plugins et pods)
       - name: Capacitor sync
         run: npx cap sync ios
 
-      # 13. Compilation de l'application iOS (non signée)
       - name: Build unsigned IPA
         run: |
           cd ios
-          # Nettoyage des caches Xcode
           rm -rf ~/Library/Developer/Xcode/DerivedData
-          # Build
           xcodebuild -workspace App/App.xcworkspace \
                      -scheme App \
                      -configuration Release \
@@ -108,8 +92,7 @@ jobs:
                      CODE_SIGN_IDENTITY="" \
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      build
-          # Recherche du .app généré
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "App.app" -path "*/Release-iphoneos/*" | head -n 1)
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "App.app" -path "*/Release-iphoneos/*" | head -1)
           if [ -z "$APP_PATH" ]; then
             echo "❌ App.app not found"
             exit 1
@@ -119,9 +102,7 @@ jobs:
           zip -r ../App-unsigned.ipa Payload
           cd ..
 
-      # 14. Upload de l'IPA comme artifact
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned-app
           path: App-unsigned.ipa
