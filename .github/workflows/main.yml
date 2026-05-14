@@ -1,4 +1,4 @@
-name: Build Full iOS App (Bun + Capacitor)
+name: Build Full iOS App
 on:
   push:
     branches: [ main ]
@@ -15,25 +15,27 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install dependencies
+      # On installe TOUT, y compris les dépendances de dev (Capacitor CLI)
+      - name: Install Dependencies
         run: bun install
 
-      # 1. Génère le dossier 'dist' avec ton projet React/Vite
+      # Génération du code Web (le dossier 'dist')
       - name: Build Web Project
         run: bun run build
 
-      # 2. Force la création du dossier 'ios' et copie le dossier 'dist' dedans
-      - name: Capacitor Sync
+      # C'est ici que le "poids" de l'app se joue
+      - name: Capacitor Setup & Sync
         run: |
+          # Installation forcée des plateformes natives
           bun x cap add ios || true
-          # Important : On s'assure que Capacitor sait qu'il doit copier 'dist'
+          # On s'assure que le contenu de 'dist' est copié dans le projet iOS
           bun x cap copy ios
           bun x cap sync ios
 
-      # 3. Compilation Xcode forcée (Inclusion de tout le projet)
       - name: Build Native iOS (Unsigned)
         run: |
           cd ios/App
+          # Compilation sans signature pour éviter l'erreur de Team ID
           xcodebuild -workspace App.xcworkspace \
                      -scheme App \
                      -configuration Release \
@@ -46,11 +48,12 @@ jobs:
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      clean build
 
-          # Création de la structure IPA
+          # Construction de l'IPA
           mkdir -p Payload
           cp -r build-output/Release-iphoneos/App.app Payload/
           
-          # Affiche la taille pour vérifier que tout est là (doit être > 30-40Mo)
+          # Vérification du poids dans les logs
+          echo "Vérification de la taille de l'App :"
           du -sh Payload/App.app
           
           zip -r ../../App-unsigned.ipa Payload
@@ -60,3 +63,4 @@ jobs:
         with:
           name: full-project-ipa
           path: App-unsigned.ipa
+          if-no-files-found: error
