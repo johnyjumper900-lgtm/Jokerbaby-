@@ -26,7 +26,7 @@ jobs:
 
       # --------------------------------------------------------------
       # Détection du dossier web généré (dist/client ou dist)
-      # et vérification que l'index.html est le bon (bundle /assets/)
+      # Vérification de l'index.html (chemins absolus ou relatifs)
       # --------------------------------------------------------------
       - name: 🔍 Localiser le vrai index.html
         id: webdir
@@ -40,9 +40,9 @@ jobs:
             exit 1
           fi
 
-          # Vérifier que cet index.html référence un bundle /assets/
-          if ! grep -q "src=\"/assets/" "$WEB_DIR/index.html"; then
-            echo "❌ L'index.html trouvé n'est pas le bon (pas de bundle /assets/)"
+          # Vérifie la présence d'un bundle JS ou CSS dans assets (chemin absolu ou relatif)
+          if ! grep -qE '(src|href)="\.?/assets/' "$WEB_DIR/index.html"; then
+            echo "❌ L'index.html trouvé ne semble pas valide (pas de référence vers /assets/ ou ./assets/)"
             cat "$WEB_DIR/index.html"
             exit 1
           fi
@@ -87,7 +87,6 @@ jobs:
 
       # --------------------------------------------------------------
       # Copier les fichiers PWA (manifest, icônes) à la racine de public
-      # s'ils existent dans project_files
       # --------------------------------------------------------------
       - name: 📱 Installer les fichiers PWA à la racine
         run: |
@@ -105,7 +104,7 @@ jobs:
           done
 
       # --------------------------------------------------------------
-      # Vérification finale que l'index.html est bien présent et valide
+      # Vérification finale que l'index.html est toujours valide
       # --------------------------------------------------------------
       - name: ✅ Vérifier l'index.html dans public
         run: |
@@ -113,8 +112,8 @@ jobs:
             echo "❌ index.html manquant !"
             exit 1
           fi
-          if ! grep -q "src=\"/assets/" ios/App/App/public/index.html; then
-            echo "❌ L'index.html copié n'est pas valide (pas de bundle /assets/)"
+          if ! grep -qE '(src|href)="\.?/assets/' ios/App/App/public/index.html; then
+            echo "❌ L'index.html copié n'est pas valide (pas de référence vers assets)"
             cat ios/App/App/public/index.html
             exit 1
           fi
