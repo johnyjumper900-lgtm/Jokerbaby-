@@ -1,114 +1,151 @@
-name: Build iOS IPA (Node 22 – Full Assets)
+name: Build iOS IPA (Node 22 – Capacitor 7 Stable)
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
 
 jobs:
   build-ios:
     runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      # ─────────────────────────────────────────────
+      # Checkout
+      # ─────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ─────────────────────────────────────────────
+      # Node.js
+      # ─────────────────────────────────────────────
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - uses: oven-sh/setup-bun@v1
+      # ─────────────────────────────────────────────
+      # Bun
+      # ─────────────────────────────────────────────
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      # ─── Dépendances ───────────────────────────────────────────
+      # ─────────────────────────────────────────────
+      # Clean old caches
+      # ─────────────────────────────────────────────
+      - name: Clean environment
+        run: |
+          rm -rf node_modules
+          rm -rf ios
+          rm -f bun.lockb
+
+      # ─────────────────────────────────────────────
+      # Install dependencies
+      # ─────────────────────────────────────────────
       - name: Install dependencies
         run: |
           bun install
-          bun add @capacitor/cli @capacitor/ios @capacitor/browser
 
-      # ─── Build web ─────────────────────────────────────────────
+          # Capacitor versions MUST match
+          bun add \
+            @capacitor/core@7 \
+            @capacitor/cli@7 \
+            @capacitor/ios@7 \
+            @capacitor/browser@7
+
+      # ─────────────────────────────────────────────
+      # Show versions
+      # ─────────────────────────────────────────────
+      - name: Show Capacitor versions
+        run: |
+          npx cap --version
+          bun pm ls | grep capacitor || true
+
+      # ─────────────────────────────────────────────
+      # Build web app
+      # ─────────────────────────────────────────────
       - name: Build web app
         run: bun run build
 
-      # ─── Détection du dossier web ──────────────────────────────
+      # ─────────────────────────────────────────────
+      # Detect web directory
+      # ─────────────────────────────────────────────
       - name: Detect web folder
         id: detect
         run: |
           if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
             echo "web_dir=dist/client" >> $GITHUB_OUTPUT
-          elif [ -f "dist/index.html" ]; then
+          elif [ -d "dist" ] && [ -f "dist/index.html" ]; then
             echo "web_dir=dist" >> $GITHUB_OUTPUT
           else
-            echo "❌ Aucun dossier web valide trouvé"
+            echo "❌ Aucun dossier web trouvé"
             exit 1
           fi
 
-      # ─── Config Capacitor ──────────────────────────────────────
-      - name: Create Capacitor config
+          echo "✅ Web dir:"
+          echo "${{ steps.detect.outputs.web_dir }}"
+
+      # ─────────────────────────────────────────────
+      # Capacitor config
+      # ─────────────────────────────────────────────
+      - name: Create capacitor.config.ts
         run: |
-          cat > capacitor.config.ts <<'EOF'
+          WEB_DIR="${{ steps.detect.outputs.web_dir }}"
+
+          cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
+
           const config: CapacitorConfig = {
             appId: 'com.jokerbaby.app',
             appName: 'Jokerbaby',
-            webDir: '${{ steps.detect.outputs.web_dir }}',
-            ios: { deploymentTarget: '17.0' },
+            webDir: '$WEB_DIR',
+            ios: {
+              deploymentTarget: '17.0'
+            },
             server: {
-              allowNavigation: [ "*.winamax.fr", "*.winamax.com" ]
+              allowNavigation: [
+                "*.winamax.fr",
+                "*.winamax.com"
+              ]
             }
           };
+
           export default config;
           EOF
 
-      # ─── Plateforme iOS ────────────────────────────────────────
+          cat capacitor.config.ts
+
+      # ─────────────────────────────────────────────
+      # Add iOS platform
+      # ─────────────────────────────────────────────
       - name: Add iOS platform
         run: |
-          rm -rf ios
           npx cap add ios
 
-      # ─── Vérification Podfile ──────────────────────────────────
-      # NOTE : Capacitor 6+ utilise SPM, pas CocoaPods.
-      # Si le Podfile est absent, on vérifie d'abord la version.
-      - name: Check Capacitor version and Podfile
+      # ─────────────────────────────────────────────
+      # Sync Capacitor
+      # ─────────────────────────────────────────────
+      - name: Sync Capacitor
         run: |
-          CAP_VERSION=$(npx cap --version 2>/dev/null | grep -oE '[0-9]+' | head -1)
-          echo "Capacitor major version: $CAP_VERSION"
+          npx cap sync ios
 
-          if [ "$CAP_VERSION" -ge 6 ]; then
-            echo "ℹ️  Capacitor 6+ détecté – Podfile non requis (SPM)"
-            echo "uses_cocoapods=false" >> $GITHUB_ENV
-          else
-            if [ ! -f "ios/App/Podfile" ]; then
-              echo "❌ Podfile introuvable après cap add ios"
-              exit 1
-            fi
-            echo "✅ Podfile trouvé"
-            echo "uses_cocoapods=true" >> $GITHUB_ENV
-          fi
-
-      # ─── iOS 17.0 dans Podfile et Xcode ───────────────────────
-      - name: Force iOS 17.0 deployment target
+      # ─────────────────────────────────────────────
+      # Force iOS 17
+      # ─────────────────────────────────────────────
+      - name: Force deployment target
         run: |
-          # Xcode project (toujours présent)
           sed -i '' \
             's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g' \
             ios/App/App.xcodeproj/project.pbxproj
 
-          # Podfile (seulement si CocoaPods)
-          if [ "$uses_cocoapods" = "true" ] && [ -f "ios/App/Podfile" ]; then
-            sed -i '' \
-              's/platform :ios, .*/platform :ios, "17.0"/' \
-              ios/App/Podfile
-          fi
-
-      # ─── CocoaPods (conditionnel) ──────────────────────────────
-      - name: Install CocoaPods
-        if: env.uses_cocoapods == 'true'
-        run: |
-          cd ios/App
-          pod install --repo-update
-
-      # ─── Copie des assets ──────────────────────────────────────
-      - name: Copy all assets to public
+      # ─────────────────────────────────────────────
+      # Copy assets manually
+      # ─────────────────────────────────────────────
+      - name: Copy assets to public
         run: |
           WEB_DIR="${{ steps.detect.outputs.web_dir }}"
           TARGET="ios/App/App/public"
@@ -116,121 +153,121 @@ jobs:
           rm -rf "$TARGET"
           mkdir -p "$TARGET"
 
-          # Copie du build web
-          cp -r "$WEB_DIR/." "$TARGET/"
+          cp -R "$WEB_DIR/." "$TARGET/"
 
-          # Copie du dossier public local
           if [ -d "public" ]; then
-            cp -rf public/. "$TARGET/" 2>/dev/null || true
+            cp -Rf public/. "$TARGET/" || true
           fi
 
-          # Copie des assets src
           if [ -d "src/assets" ]; then
             mkdir -p "$TARGET/src/assets"
-            cp -rf src/assets/. "$TARGET/src/assets/" 2>/dev/null || true
+            cp -Rf src/assets/. "$TARGET/src/assets/" || true
           fi
 
-          # Copie des fichiers PWA à la racine
-          for f in manifest.webmanifest manifest.json \
-                   icon-192.png icon-512.png apple-touch-icon.png; do
-            [ -f "$f" ] && cp -f "$f" "$TARGET/" 2>/dev/null || true
-          done
-
-          echo "✅ Taille du dossier public :"
+          echo "✅ Public folder size:"
           du -sh "$TARGET"
 
-      # ─── Capacitor copy ────────────────────────────────────────
-      - name: Capacitor sync
-        run: npx cap sync ios
-
-      # ─── Info.plist ────────────────────────────────────────────
-      - name: Add ATS and permissions
+      # ─────────────────────────────────────────────
+      # Info.plist permissions
+      # ─────────────────────────────────────────────
+      - name: Configure Info.plist
         run: |
           PLIST="ios/App/App/Info.plist"
 
-          # ATS
           /usr/libexec/PlistBuddy \
-            -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
-          /usr/libexec/PlistBuddy \
-            -c "Add :NSAppTransportSecurity dict" "$PLIST"
-          /usr/libexec/PlistBuddy \
-            -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
-          /usr/libexec/PlistBuddy \
-            -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" "$PLIST"
-
-          # Permissions
-          /usr/libexec/PlistBuddy \
-            -c "Add :NSCameraUsageDescription string 'Caméra requise'" \
-            "$PLIST" 2>/dev/null || true
-          /usr/libexec/PlistBuddy \
-            -c "Add :NSPhotoLibraryUsageDescription string 'Photos requises'" \
+            -c "Delete :NSAppTransportSecurity" \
             "$PLIST" 2>/dev/null || true
 
-      # ─── Détecter le bon workspace ─────────────────────────────
-      - name: Detect Xcode workspace or project
-        id: xcode
-        run: |
-          if [ -f "ios/App/App.xcworkspace/contents.xcworkspacedata" ]; then
-            echo "build_cmd=-workspace App/App.xcworkspace -scheme App" >> $GITHUB_OUTPUT
-            echo "✅ xcworkspace trouvé"
-          else
-            echo "build_cmd=-project App/App.xcodeproj -scheme App" >> $GITHUB_OUTPUT
-            echo "ℹ️  Pas de xcworkspace – utilisation du xcodeproj"
-          fi
+          /usr/libexec/PlistBuddy \
+            -c "Add :NSAppTransportSecurity dict" \
+            "$PLIST"
 
-      # ─── Archive Xcode ─────────────────────────────────────────
-      - name: Build archive
+          /usr/libexec/PlistBuddy \
+            -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" \
+            "$PLIST"
+
+          /usr/libexec/PlistBuddy \
+            -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" \
+            "$PLIST"
+
+          /usr/libexec/PlistBuddy \
+            -c "Add :NSCameraUsageDescription string 'Camera access required'" \
+            "$PLIST" 2>/dev/null || true
+
+          /usr/libexec/PlistBuddy \
+            -c "Add :NSPhotoLibraryUsageDescription string 'Photo library access required'" \
+            "$PLIST" 2>/dev/null || true
+
+      # ─────────────────────────────────────────────
+      # Clean Xcode cache
+      # ─────────────────────────────────────────────
+      - name: Clean Xcode cache
         run: |
           rm -rf ~/Library/Developer/Xcode/DerivedData
+
+      # ─────────────────────────────────────────────
+      # Build archive
+      # ─────────────────────────────────────────────
+      - name: Build archive
+        run: |
           cd ios
+
           xcodebuild \
-            ${{ steps.xcode.outputs.build_cmd }} \
+            -project App/App.xcodeproj \
+            -scheme App \
             -configuration Release \
             -sdk iphoneos \
             -archivePath App.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            archive 2>&1 | tee xcodebuild.log | \
-            grep -E "error:|warning:|Archive Succeeded|FAILED" || true
+            archive | tee xcodebuild.log
 
-          # Vérification du résultat
           if [ ! -d "App.xcarchive" ]; then
-            echo "❌ Archive échouée – log complet :"
+            echo "❌ Archive failed"
             cat xcodebuild.log
             exit 1
           fi
-          echo "✅ Archive créée"
 
-      # ─── Création IPA ──────────────────────────────────────────
+          echo "✅ Archive created"
+
+      # ─────────────────────────────────────────────
+      # Create IPA
+      # ─────────────────────────────────────────────
       - name: Create IPA
         run: |
           mkdir -p Payload
 
-          APP_PATH=$(find ios/App.xcarchive/Products/Applications \
-            -name "*.app" -maxdepth 1 | head -1)
+          APP=$(find ios/App.xcarchive/Products/Applications -name "*.app" | head -1)
 
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ .app introuvable dans l'archive"
+          if [ -z "$APP" ]; then
+            echo "❌ .app not found"
             exit 1
           fi
 
-          cp -R "$APP_PATH" Payload/
-          zip -r app.ipa Payload
-          echo "✅ IPA créé : $(du -sh app.ipa | cut -f1)"
+          cp -R "$APP" Payload/
 
-      # ─── Upload ────────────────────────────────────────────────
+          zip -r app.ipa Payload
+
+          echo "✅ IPA generated"
+          ls -lh app.ipa
+
+      # ─────────────────────────────────────────────
+      # Upload IPA
+      # ─────────────────────────────────────────────
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ipa-final
+          name: ios-ipa
           path: app.ipa
           retention-days: 7
 
-      # ─── Upload log en cas d'échec ─────────────────────────────
-      - name: Upload xcodebuild log on failure
+      # ─────────────────────────────────────────────
+      # Upload logs on failure
+      # ─────────────────────────────────────────────
+      - name: Upload Xcode logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: xcodebuild-log
+          name: xcode-logs
           path: ios/xcodebuild.log
           retention-days: 3
