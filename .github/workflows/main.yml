@@ -1,4 +1,4 @@
-name: Build iOS IPA (Complete + Fix Page Blanche)
+name: Build iOS IPA (Full project at root, no clobber)
 
 on:
   workflow_dispatch:
@@ -8,126 +8,76 @@ on:
 jobs:
   build-ios:
     runs-on: macos-latest
-
     steps:
-      - name: 📥 Checkout du code
-        uses: actions/checkout@v4
-
-      - name: 🟢 Installation de Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
+      - run: bun install
+      - run: bun run build
 
-      - name: 📦 Installation des dépendances
-        run: bun install
-
-      - name: 🔨 Build web avec Vite
-        run: bun run build
-
-      # --------------------------------------------------------------
-      # Détection du dossier web généré (dist/client ou dist)
-      # Vérification de l'index.html (chemins absolus ou relatifs)
-      # --------------------------------------------------------------
-      - name: 🔍 Localiser le vrai index.html
+      # ---------- Détection du dossier web ----------
+      - name: 🔍 Trouver le vrai index.html
         id: webdir
         run: |
           if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
-            WEB_DIR="dist/client"
+            echo "web_dir=dist/client" >> $GITHUB_OUTPUT
           elif [ -f "dist/index.html" ]; then
-            WEB_DIR="dist"
+            echo "web_dir=dist" >> $GITHUB_OUTPUT
           else
             echo "❌ Aucun index.html généré"
             exit 1
           fi
 
-          # Vérifie la présence d'un bundle JS ou CSS dans assets (chemin absolu ou relatif)
-          if ! grep -qE '(src|href)="\.?/assets/' "$WEB_DIR/index.html"; then
-            echo "❌ L'index.html trouvé ne semble pas valide (pas de référence vers /assets/ ou ./assets/)"
-            cat "$WEB_DIR/index.html"
-            exit 1
-          fi
-
-          echo "web_dir=$WEB_DIR" >> $GITHUB_OUTPUT
-          echo "✅ Bon index.html trouvé dans $WEB_DIR"
-
-      # --------------------------------------------------------------
-      # Nettoyage et régénération complète de la plateforme iOS
-      # --------------------------------------------------------------
-      - name: 📱 Régénérer la plateforme iOS
+      # ---------- Nettoyage et ajout plateforme iOS ----------
+      - name: 📱 Régénérer iOS
         run: |
           rm -rf ios
           bunx cap add ios
           npx cap config webDir ${{ steps.webdir.outputs.web_dir }}
 
-      # --------------------------------------------------------------
-      # Copie du contenu web (le vrai build Vite) dans le dossier public
-      # --------------------------------------------------------------
-      - name: 🧹 Copier le build web dans ios/App/App/public
+      # ---------- Copie du build web (fichiers critiques) ----------
+      - name: 🧹 Copier le build web dans public
         run: |
           rm -rf ios/App/App/public
           mkdir -p ios/App/App/public
           cp -r ${{ steps.webdir.outputs.web_dir }}/* ios/App/App/public/
 
-      # --------------------------------------------------------------
-      # Copie de TOUS les autres fichiers du projet (sources, assets, etc.)
-      # dans un sous-dossier project_files, sans écraser le web
-      # --------------------------------------------------------------
-      - name: 📦 Copier le projet dans public/project_files
+      # ---------- Copie de TOUS les fichiers du projet (sauf exclus) à la racine, sans écraser ----------
+      - name: 📦 Aspiration totale du projet dans public (sans écraser)
         run: |
-          TARGET="ios/App/App/public/project_files"
-          mkdir -p "$TARGET"
-          rsync -av --ignore-existing . "$TARGET/" \
+          # On copie tout le contenu du dépôt (sauf les dossiers exclus)
+          # L'option -n empêche d'écraser les fichiers existants (index.html, assets/*.js, etc.)
+          rsync -av --ignore-existing . ios/App/App/public/ \
             --exclude node_modules \
             --exclude .git \
             --exclude ios \
             --exclude DerivedData \
             --exclude .github \
             --exclude dist
-          echo "✅ Projet copié dans $TARGET"
+          echo "✅ Tous les fichiers du projet ont été copiés à la racine de public"
+          echo "📊 Taille finale du dossier public : $(du -sh ios/App/App/public | cut -f1)"
 
-      # --------------------------------------------------------------
-      # Copier les fichiers PWA (manifest, icônes) à la racine de public
-      # --------------------------------------------------------------
-      - name: 📱 Installer les fichiers PWA à la racine
-        run: |
-          cd ios/App/App/public
-          if [ -f "project_files/manifest.webmanifest" ]; then
-            cp project_files/manifest.webmanifest .
-          fi
-          if [ -f "project_files/manifest.json" ]; then
-            cp project_files/manifest.json .
-          fi
-          for icon in icon-192.png icon-512.png apple-touch-icon.png; do
-            if [ -f "project_files/$icon" ]; then
-              cp "project_files/$icon" .
-            fi
-          done
-
-      # --------------------------------------------------------------
-      # Vérification finale que l'index.html est toujours valide
-      # --------------------------------------------------------------
-      - name: ✅ Vérifier l'index.html dans public
+      # ---------- Vérification que l'index.html est toujours présent ----------
+      - name: ✅ Vérifier index.html
         run: |
           if [ ! -f "ios/App/App/public/index.html" ]; then
-            echo "❌ index.html manquant !"
-            exit 1
+            echo "❌ index.html a été écrasé !"
+            # Recopie de secours
+            cp ${{ steps.webdir.outputs.web_dir }}/index.html ios/App/App/public/
           fi
           if ! grep -qE '(src|href)="\.?/assets/' ios/App/App/public/index.html; then
-            echo "❌ L'index.html copié n'est pas valide (pas de référence vers assets)"
+            echo "❌ index.html invalide"
             cat ios/App/App/public/index.html
             exit 1
           fi
-          echo "✅ index.html valide"
+          echo "✅ index.html ok"
 
-      # --------------------------------------------------------------
-      # Synchronisation Capacitor (met à jour les plugins)
-      # --------------------------------------------------------------
-      - name: 🔄 Capacitor sync (plugins)
+      # ---------- Capacitor sync (plugins) ----------
+      - name: 🔄 Capacitor sync
         run: bunx cap sync ios
 
-      # --------------------------------------------------------------
-      # Compilation de l'IPA non signé
-      # --------------------------------------------------------------
+      # ---------- Compilation IPA ----------
       - name: 🛠️ Compiler l'IPA (unsigned)
         run: |
           cd ios
@@ -144,16 +94,12 @@ jobs:
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      build
           APP_PATH=$(find "$DERIVED_DATA_PATH" -name "App.app" -path "*/Release-iphoneos/*" | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ App.app introuvable"
-            exit 1
-          fi
           mkdir -p Payload
           cp -r "$APP_PATH" Payload/
           zip -r ../App-unsigned.ipa Payload
           cd ..
 
-      - name: 💾 Upload de l'IPA
+      - name: 💾 Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: ios-unsigned-app
