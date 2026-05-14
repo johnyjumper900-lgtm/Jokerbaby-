@@ -1,4 +1,4 @@
-name: Build iOS App (Bun + Capacitor)
+name: Build iOS App (Full Project)
 on:
   push:
     branches: [ main ]
@@ -21,15 +21,16 @@ jobs:
       - name: Build Web Project
         run: bun run build
 
+      # Synchronise l'intégralité de ton build Web dans le dossier iOS
       - name: Capacitor Sync
         run: |
-          bun x cap add ios
+          bun x cap add ios || true
           bun x cap sync ios
 
       - name: Build Native iOS (Unsigned)
         run: |
           cd ios/App
-          # On compile le projet généré par Capacitor sans signature
+          # Compilation de l'intégralité du projet en mode Release
           xcodebuild -workspace App.xcworkspace \
                      -scheme App \
                      -configuration Release \
@@ -42,14 +43,14 @@ jobs:
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      clean build
 
-          # Création de la structure IPA
+          # Création de l'IPA contenant tout le projet
           mkdir -p Payload
           cp -r build-output/Release-iphoneos/App.app Payload/
           zip -r ../../App-unsigned.ipa Payload
 
-      - name: Upload IPA Artifact
+      - name: Upload Full IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-app-unsigned
+          name: full-project-ipa
           path: App-unsigned.ipa
           if-no-files-found: error
