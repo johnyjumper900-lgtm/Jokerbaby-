@@ -12,7 +12,8 @@ interface NormalizedPick {
 }
 
 function cleanJsonText(content: string) {
-  return content.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+  return content.replace(/^```(?:json)?/i, "").replace(/
+```$/i, "").trim();
 }
 
 function splitTeams(match: string) {
@@ -65,52 +66,56 @@ function normalizeTicket(raw: Record<string, unknown>) {
 }
 
 const _analyzeTicketSchema = z.object({
-        text: z.string().optional(),
-        fileBase64: z.string().optional(),
-        mimeType: z.string().optional(),
-      })
-      ;
+  text: z.string().optional(),
+  fileBase64: z.string().optional(),
+  mimeType: z.string().optional(),
+});
+
 export async function analyzeTicket(rawInput: unknown) {
   const data = _analyzeTicketSchema.parse(rawInput);
-    const LOVABLE_API_KEY = (typeof localStorage !== "undefined" && localStorage.getItem("magic.gemini_key")) || "";
-    if (!LOVABLE_API_KEY) throw new Error("Aucune clé Gemini configurée (Paramètres)");
+  const LOVABLE_API_KEY = (typeof localStorage !== "undefined" && localStorage.getItem("magic.gemini_key")) || "";
+  if (!LOVABLE_API_KEY) throw new Error("Aucune clé Gemini configurée (Paramètres)");
 
-    const text = (data.text || "").trim();
-    const dataUrl = data.fileBase64 ? (data.fileBase64.startsWith("data:") ? data.fileBase64 : `data:${data.mimeType || "image/jpeg"};base64,${data.fileBase64}`) : "";
+  const text = (data.text || "").trim();
+  const dataUrl = data.fileBase64 ? (data.fileBase64.startsWith("data:") ? data.fileBase64 : `data:${data.mimeType || "image/jpeg"};base64,${data.fileBase64}`) : "";
 
-    if (!text && !dataUrl) throw new Error("Aucun ticket à lire");
+  if (!text && !dataUrl) throw new Error("Aucun ticket à lire");
 
-    const userContent: Array<Record<string, unknown>> = [
-      {
-        type: "text",
-        text:
-          "Lis le ticket de pari sportif fourni. Tu dois extraire tous les paris visibles, même si la photo est inclinée, sombre, partiellement floue ou contient plusieurs colonnes. " +
-          "Réponds uniquement avec ce JSON STRICT, sans markdown: " +
-          '{"bookmaker":string|null,"stake":number|null,"totalOdds":number|null,"picks":[{"match":string,"teamA":string,"teamB":string,"type":string,"option":string,"odds":number}]}. ' +
-          "Normalise les cotes en nombre décimal, sépare les équipes, et n'invente pas de pari invisible. Texte collé si présent:\n" +
-          text,
-      },
-    ];
+  const userContent: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text:
+        "Lis le ticket de pari sportif fourni. Tu dois extraire tous les paris visibles, même si la photo est inclinée, sombre, partiellement floue ou contient plusieurs colonnes. " +
+        "Réponds uniquement avec ce JSON STRICT, sans markdown: " +
+        '{"bookmaker":string|null,"stake":number|null,"totalOdds":number|null,"picks":[{"match":string,"teamA":string,"teamB":string,"type":string,"option":string,"odds":number}]}. ' +
+        "Normalise les cotes en nombre décimal, sépare les équipes, et n'invente pas de pari invisible. Texte collé si présent:\n" +
+        text,
+    },
+  ];
 
-    if (dataUrl) userContent.push({ type: "image_url", image_url: { url: dataUrl } }
+  // Correction apportée ici : ajout de );
+  if (dataUrl) userContent.push({ type: "image_url", image_url: { url: dataUrl } });
 
-    const aiResp = await fetch(LOVABLE_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: dataUrl ? "google/gemini-2.5-flash" : "google/gemini-2.5-flash-lite",
-        messages: [{ role: "system", content: "Tu es un OCR expert de tickets de paris sportifs. Tu réponds uniquement en JSON valide." }, { role: "user", content: userContent }],
-        response_format: { type: "json_object" },
-      }),
-    });
+  const aiResp = await fetch(LOVABLE_API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${LOVABLE_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: dataUrl ? "google/gemini-2.5-flash" : "google/gemini-2.5-flash-lite",
+      messages: [
+        { role: "system", content: "Tu es un OCR expert de tickets de paris sportifs. Tu réponds uniquement en JSON valide." },
+        { role: "user", content: userContent }
+      ],
+      response_format: { type: "json_object" },
+    }),
+  });
 
-    if (!aiResp.ok) throw new Error(`Lecture IA impossible (${aiResp.status})`);
+  if (!aiResp.ok) throw new Error(`Lecture IA impossible (${aiResp.status})`);
 
-    const aiJson = await aiResp.json();
-    const content = cleanJsonText(aiJson?.choices?.[0]?.message?.content || "{}");
-    const parsed = JSON.parse(content);
-    return normalizeTicket(parsed);
-});
+  const aiJson = await aiResp.json();
+  const content = cleanJsonText(aiJson?.choices?.[0]?.message?.content || "{}");
+  const parsed = JSON.parse(content);
+  return normalizeTicket(parsed);
+}
