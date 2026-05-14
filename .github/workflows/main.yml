@@ -12,45 +12,27 @@ jobs:
     runs-on: macos-14
 
     steps:
-      # --------------------------------------------------
-      # Checkout
-      # --------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # Setup Node
-      # --------------------------------------------------
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # --------------------------------------------------
-      # Setup Bun
-      # --------------------------------------------------
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      # --------------------------------------------------
-      # Install dependencies
-      # --------------------------------------------------
       - name: Install dependencies
         run: |
           bun install
           bun add @capacitor-community/speech-recognition @capacitor/browser
 
-      # --------------------------------------------------
-      # Build web app
-      # --------------------------------------------------
       - name: Build web app
         run: bun run build
 
-      # --------------------------------------------------
-      # Detect build folder
-      # --------------------------------------------------
       - name: Detect build folder
         id: detect
         run: |
@@ -63,10 +45,7 @@ jobs:
             exit 1
           fi
 
-      # --------------------------------------------------
-      # Create Capacitor config (FIX WINAMAX INCLUS)
-      # --------------------------------------------------
-      - name: Create Capacitor config
+      - name: Create Capacitor config (FIX WINAMAX)
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -75,15 +54,11 @@ jobs:
             appId: 'com.jokerbaby.app',
             appName: 'Jokerbaby',
             webDir: '${{ steps.detect.outputs.web_dir }}',
-
-            // FIX: Tromper la détection de Winamax[span_3](start_span)[span_3](end_span)
             overrideUserAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-
             ios: {
               deploymentTarget: '15.0',
               limitsNavigationsToAppBoundDomains: false
             },
-
             server: {
               iosScheme: 'https',
               hostname: 'app.jokerbaby.com',
@@ -99,71 +74,37 @@ jobs:
           export default config;
           EOF
 
-      # --------------------------------------------------
-      # Clean old iOS
-      # --------------------------------------------------
-      - name: Clean iOS
+      - name: Clean old iOS
         run: rm -rf ios
 
-      # --------------------------------------------------
-      # Add iOS platform
-      # --------------------------------------------------
-      - name: Add iOS platform
-        run: npx cap add ios
+      # --- CORRECTION ICI : Ajouter sans lancer pod install immédiatement ---
+      - name: Add iOS platform (No Pods)
+        run: npx cap add ios --no-update
 
-      # --------------------------------------------------
-      # Fix Podfile (FIX CRITIQUE PODS)
-      # --------------------------------------------------
       - name: Fix Podfile deployment target
         run: |
-          # Force iOS 15.0 pour éviter l'erreur de compatibilité des plugins[span_4](start_span)[span_4](end_span)
+          # Force la plateforme à 15.0 pour supporter le plugin de parole[span_2](start_span)[span_2](end_span)
           PODFILE="ios/App/Podfile"
           sed -i '' "s/platform :ios, .*/platform :ios, '15.0'/" "$PODFILE"
           cat "$PODFILE"
 
-      # --------------------------------------------------
-      # Capacitor sync
-      # --------------------------------------------------
-      - name: Capacitor sync
+      - name: Capacitor sync & Update Pods
         run: npx cap sync ios
 
-      # --------------------------------------------------
-      # Install CocoaPods
-      # --------------------------------------------------
-      - name: Install CocoaPods
-        run: |
-          cd ios/App
-          pod install --repo-update
-
-      # --------------------------------------------------
-      # Add iOS permissions & ATS Fix (Winamax)
-      # --------------------------------------------------
       - name: Add permissions and Winamax Fix
         run: |
           PLIST="ios/App/App/Info.plist"
-
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Microphone required'" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Speech recognition required'" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Camera required'" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Photos required'" $PLIST || true
           
-          # FIX: Déverrouillage sécurité pour Winamax[span_5](start_span)[span_5](end_span)[span_6](start_span)[span_6](end_span)
+          # FIX: Déverrouillage sécurité pour Winamax[span_3](start_span)[span_3](end_span)[span_4](start_span)[span_4](end_span)
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST || true
 
-      # --------------------------------------------------
-      # Copy web build
-      # --------------------------------------------------
-      - name: Copy web build
-        run: |
-          rm -rf ios/App/App/public/*
-          cp -R ${{ steps.detect.outputs.web_dir }}/. ios/App/App/public/
-
-      # --------------------------------------------------
-      # Build archive
-      # --------------------------------------------------
       - name: Build archive
         run: |
           cd ios
@@ -179,18 +120,12 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             archive
 
-      # --------------------------------------------------
-      # Create IPA
-      # --------------------------------------------------
       - name: Create IPA
         run: |
           mkdir -p Payload
           cp -R ios/App.xcarchive/Products/Applications/App.app Payload/
           zip -r app.ipa Payload
 
-      # --------------------------------------------------
-      # Upload IPA
-      # --------------------------------------------------
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
