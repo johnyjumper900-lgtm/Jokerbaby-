@@ -1,4 +1,4 @@
-name: Build iOS IPA (Full project at root, no clobber)
+mname: Build iOS IPA (Full project at root, no clobber)
 
 on:
   workflow_dispatch:
