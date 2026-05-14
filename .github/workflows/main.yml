@@ -1,24 +1,89 @@
-- name: 🌍 Aspiration de toutes les ressources (images, polices, données)
-  run: |
-    # Créer un dossier pour les ressources supplémentaires
-    mkdir -p dist/extra_assets
+name: Build iOS IPA (Full project copy)
 
-    # 1. Copier tout le dossier public (déjà fait plus tôt, mais on le refait pour être sûr)
-    if [ -d "public" ]; then
-      cp -r public/* dist/
-    fi
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
 
-    # 2. Copier tous les PNG, JPG, etc. depuis TOUT le projet (sauf node_modules, dist, ios, .git, src/.tsx? mais on garde)
-    find . -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" -o -iname "*.svg" -o -iname "*.webp" -o -iname "*.ttf" -o -iname "*.otf" -o -iname "*.woff2" -o -iname "*.json" \) \
-         -not -path "./node_modules/*" \
-         -not -path "./dist/*" \
-         -not -path "./ios/*" \
-         -not -path "./.git/*" \
-         -exec cp --parents {} dist/extra_assets/ \;
+jobs:
+  build-ios:
+    runs-on: macos-latest
 
-    # 3. Si vous voulez absolument TOUS les fichiers (y compris sources, configs) – déconseillé mais possible
-    # find . -type f -not -path "./node_modules/*" -not -path "./dist/*" -not -path "./ios/*" -not -path "./.git/*" -exec cp --parents {} dist/extra_assets/ \;
+    steps:
+      - name: 📥 Checkout du code
+        uses: actions/checkout@v4
 
-    echo "✅ Contenu de extra_assets :"
-    ls -la dist/extra_assets/ | head -20
-    echo "Taille totale extra_assets : $(du -sh dist/extra_assets | cut -f1)"
+      - name: 🟢 Installation de Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: 📦 Installation des dépendances
+        run: bun install
+
+      - name: 🔨 Build web (génère le dossier dist)
+        run: bun run build
+
+      # --------------------------------------------------------------
+      # ÉTAPE CRITIQUE : Copie de TOUS les fichiers du projet dans dist
+      # --------------------------------------------------------------
+      - name: 📦 Copie intégrale du projet dans dist/full_project
+        run: |
+          # Créer un dossier pour l'ensemble du projet
+          mkdir -p dist/full_project
+
+          # Copier tout le contenu du répertoire courant (sauf les dossiers exclus)
+          # Vers dist/full_project, en conservant l'arborescence
+          rsync -av --progress . dist/full_project/ \
+            --exclude node_modules \
+            --exclude .git \
+            --exclude dist \
+            --exclude ios \
+            --exclude DerivedData \
+            --exclude .github \
+            --exclude .DS_Store
+
+          echo "✅ Copie terminée. Contenu de dist/full_project :"
+          ls -la dist/full_project/
+          echo "Taille totale copiée : $(du -sh dist/full_project | cut -f1)"
+
+      - name: 🔄 Synchronisation Capacitor (copie dist vers ios)
+        run: bunx cap sync ios
+
+      - name: 📱 Ajout de la plateforme iOS (si absente)
+        run: |
+          if [ ! -d "ios" ]; then
+            bunx cap add ios
+          fi
+
+      - name: 🛠️ Compilation de l'application iOS non signée
+        run: |
+          cd ios
+          DERIVED_DATA_PATH=$(pwd)/DerivedData
+          rm -rf "$DERIVED_DATA_PATH"
+          xcodebuild -workspace App/App.xcworkspace \
+                     -scheme App \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     -derivedDataPath "$DERIVED_DATA_PATH" \
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGN_IDENTITY="" \
+                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
+                     build
+          APP_PATH=$(find "$DERIVED_DATA_PATH" -name "App.app" -path "*/Release-iphoneos/*" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ App.app introuvable"
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -r ../App-unsigned.ipa Payload
+          cd ..
+
+      - name: 💾 Upload de l'IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-app-full
+          path: App-unsigned.ipa
+          retention-days: 7
