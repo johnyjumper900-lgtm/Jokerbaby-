@@ -3,141 +3,84 @@ name: Build iOS IPA (Stable Fix)
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
 
 jobs:
   build-ios:
     runs-on: macos-14
 
     steps:
-      # --------------------------------------------------
-      # Checkout
-      # --------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # Node + Bun
-      # --------------------------------------------------
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup Bun
+      - name: Setup Node & Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      # --------------------------------------------------
-      # Install deps
-      # --------------------------------------------------
       - name: Install dependencies
         run: |
           bun install
           bun add @capacitor-community/speech-recognition @capacitor/browser
 
-      # --------------------------------------------------
-      # Build web app
-      # --------------------------------------------------
       - name: Build web app
         run: bun run build
 
-      # --------------------------------------------------
-      # Detect build folder
-      # --------------------------------------------------
       - name: Detect build folder
         id: detect
         run: |
-          if [ -d "dist" ]; then
-            echo "web_dir=dist" >> $GITHUB_OUTPUT
-          elif [ -d "build" ]; then
-            echo "web_dir=build" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Build folder introuvable"
-            exit 1
-          fi
+          if [ -d "dist" ]; then echo "web_dir=dist" >> $GITHUB_OUTPUT
+          elif [ -d "build" ]; then echo "web_dir=build" >> $GITHUB_OUTPUT
+          else echo "❌ Build folder introuvable"; exit 1; fi
 
-      # --------------------------------------------------
-      # Capacitor config (FIX WINAMAX INCLUS)
-      # --------------------------------------------------
-      - name: Create Capacitor config
+      - name: Create Capacitor config (FIX WINAMAX)
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
-
           const config: CapacitorConfig = {
             appId: 'com.jokerbaby.app',
             appName: 'Jokerbaby',
             webDir: '${{ steps.detect.outputs.web_dir }}',
-            bundledWebRuntime: false,
-            
-            // FIX: Se faire passer pour Safari Mobile pour éviter le blocage Winamax[span_2](start_span)[span_2](end_span)
             overrideUserAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-
             server: {
-              // FIX: Autoriser la navigation vers Winamax[span_3](start_span)[span_3](end_span)
-              allowNavigation: [
-                '*.winamax.fr',
-                '*.winamax.com',
-                'winamax.fr',
-                'winamax.com'
-              ],
+              allowNavigation: ['*.winamax.fr', '*.winamax.com', 'winamax.fr', 'winamax.com'],
               iosScheme: 'https',
               hostname: 'app.jokerbaby.com'
             },
-
             ios: {
               deploymentTarget: '15.0',
               limitsNavigationsToAppBoundDomains: false
             }
           };
-
           export default config;
           EOF
 
-      # --------------------------------------------------
-      # Remove old ios & Add platform
-      # --------------------------------------------------
-      - name: Clean and Add iOS
-        run: |
-          rm -rf ios
-          npx cap add ios || true
+      - name: Add iOS platform
+        run: npx cap add ios || true
 
-      # --------------------------------------------------
-      # Capacitor sync
-      # --------------------------------------------------
+      # --- FIX CRITIQUE POUR L'ERREUR DE PODS ---
+      - name: Force iOS Deployment Target in Podfile
+        run: |
+          # Définit iOS 15.0 comme cible minimale dans le Podfile pour satisfaire les plugins[span_1](start_span)[span_1](end_span)
+          sed -i '' "s/platform :ios, '13.0'/platform :ios, '15.0'/" ios/App/Podfile
+          sed -i '' "s/platform :ios, '12.0'/platform :ios, '15.0'/" ios/App/Podfile
+          
       - name: Capacitor sync
         run: npx cap sync ios
 
-      # --------------------------------------------------
-      # iOS permissions & Winamax Security Fix (Info.plist)
-      # --------------------------------------------------
-      - name: iOS permissions and ATS Fix
+      - name: iOS permissions & Winamax Security Fix (Info.plist)
         run: |
           PLIST="ios/App/App/Info.plist"
-
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Microphone requis'" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Reconnaissance vocale requise'" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Caméra requise'" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Photos requises'" $PLIST || true
-          
-          # FIX CRITIQUE: Autoriser le chargement de contenu web externe (ATS)[span_4](start_span)[span_4](end_span)[span_5](start_span)[span_5](end_span)
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" $PLIST
 
-      # --------------------------------------------------
-      # Build iOS Archive
-      # --------------------------------------------------
-      - name: Build iOS
+      - name: Build Xcode Archive
         run: |
           cd ios
-          rm -rf ~/Library/Developer/Xcode/DerivedData
           xcodebuild \
             -workspace App/App.xcworkspace \
             -scheme App \
@@ -150,18 +93,12 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             archive
 
-      # --------------------------------------------------
-      # Create IPA
-      # --------------------------------------------------
       - name: Create IPA
         run: |
           mkdir -p Payload
           cp -R ios/App.xcarchive/Products/Applications/App.app Payload/
           zip -r app.ipa Payload
-
-      # --------------------------------------------------
-      # Upload IPA
-      # --------------------------------------------------
+          
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
