@@ -1,27 +1,142 @@
-- name: Copy ALL assets (forced)
-  run: |
-    TARGET="ios/App/App/public"
-    # 1. Copie du build web (obligatoire)
-    cp -r ${{ steps.detect.outputs.web_dir }}/* "$TARGET/"
-    # 2. Copie du dossier public/ (images, etc.) – forcée, écrase si nécessaire
-    if [ -d "public" ]; then
-      cp -rf public/* "$TARGET/" 2>/dev/null || true
-    fi
-    # 3. Copie de src/assets (si existant)
-    if [ -d "src/assets" ]; then
-      mkdir -p "$TARGET/src/assets"
-      cp -rf src/assets/* "$TARGET/src/assets/"
-    fi
-    # 4. Copie de tous les fichiers .png, .jpg, .jpeg, .gif, .webp, .ttf, .woff2 (peu importe où)
-    find . -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.ttf" -o -iname "*.woff2" \) \
-      -not -path "./node_modules/*" -not -path "./dist/*" -not -path "./ios/*" -not -path "./.git/*" \
-      -exec cp --parents {} "$TARGET/" \;
-    # 5. Copie des fichiers PWA à la racine
-    cd "$TARGET"
-    for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
-      [ -f "../../../../$f" ] && cp -f "../../../../$f" . 2>/dev/null || true
-    done
-    # 6. Restauration de l'index.html si écrasé
-    if ! grep -q "assets/" index.html; then
-      cp ${{ steps.detect.outputs.web_dir }}/index.html .
-    fi
+name: Build iOS IPA (Final Fix)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - run: bun install
+      - run: bun run build
+
+      - name: Detect web folder
+        id: detect
+        run: |
+          if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
+            echo "web_dir=dist/client" >> $GITHUB_OUTPUT
+          elif [ -f "dist/index.html" ]; then
+            echo "web_dir=dist" >> $GITHUB_OUTPUT
+          else
+            exit 1
+          fi
+
+      - name: Force analyzeTicket in bundle
+        run: |
+          WEB_DIR="${{ steps.detect.outputs.web_dir }}"
+          if ! grep -r "analyzeTicket" "$WEB_DIR" --include="*.js"; then
+            echo 'import { analyzeTicket } from "../../src/server-api/analyze-ticket";' >> "$WEB_DIR/assets/force.js"
+            echo 'window.analyzeTicket = analyzeTicket;' >> "$WEB_DIR/assets/force.js"
+          fi
+
+      - name: Create Capacitor config (iOS 17 – stable)
+        run: |
+          cat > capacitor.config.ts <<EOF
+          import type { CapacitorConfig } from '@capacitor/cli';
+          const config: CapacitorConfig = {
+            appId: 'com.jokerbaby.app',
+            appName: 'Jokerbaby',
+            webDir: '${{ steps.detect.outputs.web_dir }}',
+            ios: { deploymentTarget: '17.0' },
+            server: { allowNavigation: [ "*.winamax.fr", "*.winamax.com" ] }
+          };
+          export default config;
+          EOF
+
+      - name: Add iOS platform
+        run: |
+          rm -rf ios
+          npx cap add ios
+
+      - name: Force iOS 17 in Podfile & Xcode
+        run: |
+          sed -i '' 's/platform :ios, .*/platform :ios, "17.0"/' ios/App/Podfile
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g' ios/App/App.xcodeproj/project.pbxproj
+
+      - name: pod install
+        run: |
+          cd ios/App
+          pod install --repo-update
+
+      # ------------------------------------------------------------
+      # COPIE FORCÉE DE TOUTES LES RESSOURCES
+      # ------------------------------------------------------------
+      - name: Copy all assets (public, src/assets, etc.)
+        run: |
+          TARGET="ios/App/App/public"
+          rm -rf "$TARGET"
+          mkdir -p "$TARGET"
+          # 1. Web build
+          cp -r ${{ steps.detect.outputs.web_dir }}/* "$TARGET/"
+          # 2. Dossier public/
+          if [ -d "public" ]; then
+            cp -rf public/* "$TARGET/" 2>/dev/null || true
+          fi
+          # 3. Dossier src/assets/
+          if [ -d "src/assets" ]; then
+            mkdir -p "$TARGET/src/assets"
+            cp -rf src/assets/* "$TARGET/src/assets/"
+          fi
+          # 4. Toutes les images, polices, fichiers JSON (peu importe où)
+          find . -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.svg" -o -iname "*.ttf" -o -iname "*.woff2" -o -iname "*.json" \) \
+            -not -path "./node_modules/*" -not -path "./dist/*" -not -path "./ios/*" -not -path "./.git/*" \
+            -exec cp --parents {} "$TARGET/" \; 2>/dev/null || true
+          # 5. Fichiers PWA
+          cd "$TARGET"
+          for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
+            [ -f "../../../../$f" ] && cp -f "../../../../$f" . 2>/dev/null || true
+          done
+          # 6. Restaurer index.html si corrompu
+          if ! grep -q "assets/" index.html; then
+            cp ${{ steps.detect.outputs.web_dir }}/index.html .
+          fi
+          # 7. Diagnostic final
+          echo "📊 Taille totale du dossier public :"
+          du -sh "$TARGET"
+          echo "📁 Les 10 plus gros fichiers :"
+          find "$TARGET" -type f -exec du -h {} + | sort -rh | head -10
+
+      - name: Capacitor copy
+        run: npx cap copy ios
+
+      - name: Add ATS & permissions
+        run: |
+          PLIST="ios/App/App/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Caméra requise'" $PLIST 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Photos requises'" $PLIST 2>/dev/null || true
+
+      - name: Build archive
+        run: |
+          cd ios
+          rm -rf ~/Library/Developer/Xcode/DerivedData
+          xcodebuild -workspace App/App.xcworkspace \
+                     -scheme App \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     -archivePath App.xcarchive \
+                     CODE_SIGNING_ALLOWED=NO \
+                     archive
+
+      - name: Create IPA
+        run: |
+          mkdir -p Payload
+          cp -R ios/App.xcarchive/Products/Applications/App.app Payload/
+          zip -r app.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-final
+          path: app.ipa
+          retention-days: 7
