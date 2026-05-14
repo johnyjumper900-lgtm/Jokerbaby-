@@ -1,7 +1,10 @@
       - name: Build iOS App (Unsigned)
         run: |
           cd ios/App
-          # 1. Compilation sans signature (CODE_SIGNING_ALLOWED=NO)
+          # 1. Nettoyage et installation des Pods (sécurité)
+          pod install
+
+          # 2. Compilation forcée sans signature
           xcodebuild -workspace App.xcworkspace \
                      -scheme App \
                      -configuration Release \
@@ -9,11 +12,15 @@
                      CODE_SIGNING_ALLOWED=NO \
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGN_IDENTITY="" \
-                     AD_HOC_CODE_SIGNING_ALLOWED=YES
+                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
+                     clean build
 
-          # 2. Création de la structure IPA manuellement
+          # 3. Création manuelle de l'IPA (Structure Payload)
           mkdir -p build/Payload
-          cp -r build/Release-iphoneos/App.app build/Payload/
+          # On cherche l'exécutable .app généré
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "App.app" | grep "Release-iphoneos" | head -n 1)
+          cp -r "$APP_PATH" build/Payload/
+          
           cd build
           zip -r ../../../App-unsigned.ipa Payload
           cd ../../..
@@ -21,6 +28,6 @@
       - name: Upload Unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-unsigned-ipa
+          name: ios-unsigned-app
           path: App-unsigned.ipa
           retention-days: 7
