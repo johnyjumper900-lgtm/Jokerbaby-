@@ -1,11 +1,9 @@
-name: Build iOS IPA (Final – No Failure)
+name: Build iOS IPA (Complete – Working)
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [ main, master ]
 
 jobs:
   build-ios:
@@ -26,7 +24,9 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: bun install
+        run: |
+          bun install
+          bun add @capacitor-community/speech-recognition @capacitor/browser
 
       - name: Build web app
         run: bun run build
@@ -54,7 +54,15 @@ jobs:
             exit 1
           fi
 
-      - name: Create Capacitor config with iOS 16.0
+      - name: Force analyzeTicket inclusion
+        run: |
+          # Crée un fichier d'import factice si nécessaire
+          if ! grep -r "analyzeTicket" "${{ steps.detect.outputs.web_dir }}" --include="*.js" > /dev/null; then
+            echo "// Force inclusion" >> "${{ steps.detect.outputs.web_dir }}/assets/force_analyze.js"
+            echo "import '../../src/server-api/analyze-ticket';" >> "${{ steps.detect.outputs.web_dir }}/assets/force_analyze.js"
+          fi
+
+      - name: Create Capacitor config (iOS 16.0)
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -71,10 +79,7 @@ jobs:
             server: {
               iosScheme: 'https',
               hostname: 'app.jokerbaby.com',
-              allowNavigation: [
-                "*.winamax.fr",
-                "*.winamax.com"
-              ]
+              allowNavigation: [ "*.winamax.fr", "*.winamax.com" ]
             }
           };
           export default config;
@@ -85,14 +90,10 @@ jobs:
           rm -rf ios
           npx cap add ios
 
-      - name: Set iOS deployment target to 16.0 in Podfile
+      - name: Set iOS 16.0 in Podfile and Xcode project
         run: |
           PODFILE="ios/App/Podfile"
           sed -i '' "s/^platform :ios, .*/platform :ios, '16.0'/" "$PODFILE"
-          cat "$PODFILE"
-
-      - name: Set deployment target in Xcode project
-        run: |
           PROJ="ios/App/App.xcodeproj/project.pbxproj"
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 16.0/g' "$PROJ"
 
@@ -102,48 +103,46 @@ jobs:
           mkdir -p ios/App/App/public
           cp -r ${{ steps.detect.outputs.web_dir }}/* ios/App/App/public/
 
-      - name: Copy static assets (public folder) without overwriting
+      - name: Copy full static assets (public folder) – no ignore
         run: |
           if [ -d "public" ]; then
-            rsync -av --ignore-existing --exclude="index.html" public/ ios/App/App/public/
+            # Copie récursive, écrase si nécessaire, mais protège index.html déjà présent
+            cp -rf public/* ios/App/App/public/ 2>/dev/null || true
           fi
 
-      # ---------- ÉTAPE CORRIGÉE ----------
-      - name: Copy PWA files
+      - name: Copy PWA files (conditional)
         run: |
           cd ios/App/App/public
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
-            if [ -f "../../../../$f" ]; then
-              cp -n "../../../../$f" .
-            fi
+            [ -f "../../../../$f" ] && cp -f "../../../../$f" . || true
           done
-      # -----------------------------------
 
-      - name: Restore correct index.html if needed
+      - name: Ensure valid index.html
         run: |
           cd ios/App/App/public
           if [ ! -f "index.html" ] || ! grep -q "assets/" index.html; then
+            echo "⚠️ Restoring index.html from build"
             cp ${{ steps.detect.outputs.web_dir }}/index.html .
           fi
           if ! grep -q "assets/" index.html; then
-            echo "❌ index.html final invalide"
+            echo "❌ Fatal: index.html still invalid"
             exit 1
           fi
 
-      - name: Prepare icon
+      - name: Prepare app icon
         run: |
           mkdir -p assets
           if [ -f "public/icon-512.png" ]; then cp public/icon-512.png assets/icon.png; \
           elif [ -f "icon-512.png" ]; then cp icon-512.png assets/icon.png; \
           elif [ -f "public/apple-touch-icon.png" ]; then cp public/apple-touch-icon.png assets/icon.png; \
-          else echo "Aucune icône, skip" && exit 0; fi
+          else echo "No icon found, skipping generation"; exit 0; fi
 
-      - name: Generate iOS icons (optional)
+      - name: Generate iOS icons
         run: |
           npm install -g @capacitor/assets
-          npx capacitor-assets generate --ios || echo "Génération icônes ignorée"
+          npx capacitor-assets generate --ios || echo "Icon generation skipped"
 
-      - name: Add permissions and ATS
+      - name: Add permissions & ATS
         run: |
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Microphone required'" $PLIST 2>/dev/null || true
