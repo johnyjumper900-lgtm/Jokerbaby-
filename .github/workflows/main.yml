@@ -1,4 +1,4 @@
-name: Build iOS IPA (iOS 18 – Final)
+name: Build iOS IPA (iOS 18, no auto pod)
 
 on:
   workflow_dispatch:
@@ -8,30 +8,24 @@ on:
 jobs:
   build-ios:
     runs-on: macos-14
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      - name: Install dependencies (include speech plugin)
+      - name: Install dependencies
         run: |
           bun install
           bun add @capacitor-community/speech-recognition @capacitor/browser
 
-      - name: Build web app
+      - name: Build web
         run: bun run build
 
-      - name: Detect build folder
+      - name: Detect web dir
         id: detect
         run: |
           if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
@@ -39,24 +33,10 @@ jobs:
           elif [ -f "dist/index.html" ]; then
             echo "web_dir=dist" >> $GITHUB_OUTPUT
           else
-            echo "❌ No index.html found"
             exit 1
           fi
 
-      - name: Validate build index.html
-        run: |
-          if ! grep -q "assets/" "${{ steps.detect.outputs.web_dir }}/index.html"; then
-            echo "❌ Invalid index.html (no /assets/)"
-            exit 1
-          fi
-
-      - name: Force analyzeTicket inclusion
-        run: |
-          if ! grep -r "analyzeTicket" "${{ steps.detect.outputs.web_dir }}" --include="*.js" > /dev/null; then
-            echo 'import "../../src/server-api/analyze-ticket";' >> "${{ steps.detect.outputs.web_dir }}/assets/force.js"
-          fi
-
-      - name: Create Capacitor config (iOS 18.0)
+      - name: Create Capacitor config (iOS 18)
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -64,99 +44,71 @@ jobs:
             appId: 'com.jokerbaby.app',
             appName: 'Jokerbaby',
             webDir: '${{ steps.detect.outputs.web_dir }}',
-            overrideUserAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
-            ios: {
-              deploymentTarget: '18.0',
-              limitsNavigationsToAppBoundDomains: false
-            },
-            server: {
-              iosScheme: 'https',
-              hostname: 'app.jokerbaby.com',
-              allowNavigation: [ "*.winamax.fr", "*.winamax.com" ]
-            }
+            ios: { deploymentTarget: '18.0' },
+            server: { allowNavigation: [ "*.winamax.fr", "*.winamax.com" ] }
           };
           export default config;
           EOF
 
-      - name: Add iOS platform (without sync)
-        run: |
-          rm -rf ios
-          npx cap add ios
+      - name: Add iOS platform (no sync)
+        run: npx cap add ios
 
       # ------------------------------------------------------------
-      # FORCER iOS 18.0 dans Podfile et projet Xcode (avant tout pod install)
+      # Forcer iOS 18.0 dans Podfile et Xcode project avant tout pod install
       # ------------------------------------------------------------
-      - name: Patch Podfile to iOS 18.0
+      - name: Force iOS 18 in Podfile
         run: |
           sed -i '' 's/platform :ios, .*/platform :ios, "18.0"/' ios/App/Podfile
-          echo "Podfile content:"
           cat ios/App/Podfile
 
-      - name: Patch Xcode project deployment target
+      - name: Force iOS 18 in Xcode project
         run: |
-          PROJ="ios/App/App.xcodeproj/project.pbxproj"
-          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 18.0/g' "$PROJ"
-          grep "IPHONEOS_DEPLOYMENT_TARGET" "$PROJ" | head -3
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 18.0/g' ios/App/App.xcodeproj/project.pbxproj
 
       # ------------------------------------------------------------
-      # Copie des assets (sans écraser index.html)
+      # Copie manuelle des assets web (évite le pod install automatique)
       # ------------------------------------------------------------
-      - name: Copy web build to public
+      - name: Copy web assets manually
         run: |
           rm -rf ios/App/App/public
           mkdir -p ios/App/App/public
           cp -r ${{ steps.detect.outputs.web_dir }}/* ios/App/App/public/
-
-      - name: Copy public/ assets (images, etc.)
-        run: |
-          if [ -d "public" ]; then
-            cp -rf public/* ios/App/App/public/ 2>/dev/null || true
-          fi
-
-      - name: Copy PWA files
-        run: |
+          if [ -d "public" ]; then cp -rf public/* ios/App/App/public/ 2>/dev/null || true; fi
+          # Copie des fichiers PWA
           cd ios/App/App/public
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
             [ -f "../../../../$f" ] && cp -f "../../../../$f" . || true
           done
-
-      - name: Restore index.html if overwritten
-        run: |
-          cd ios/App/App/public
+          # Restauration index.html si nécessaire
           if ! grep -q "assets/" index.html; then
             cp ${{ steps.detect.outputs.web_dir }}/index.html .
           fi
 
       # ------------------------------------------------------------
-      # Capacitor copy + update (sans pod install automatique)
+      # Pod install manuel (avec iOS 18.0)
       # ------------------------------------------------------------
-      - name: Capacitor copy (web assets only)
-        run: npx cap copy ios
-
-      - name: Capacitor update (plugins, but we'll pod install manually)
-        run: npx cap update ios --no-install || true   # évite pod install
-        # Si --no-install n'est pas supporté, on fait simplement pod install plus tard
-
-      - name: Manual pod install (iOS 18.0)
+      - name: Install CocoaPods
         run: |
           cd ios/App
           pod install --repo-update
 
       # ------------------------------------------------------------
-      # Icônes, permissions et ATS
+      # Finalisation Capacitor (sans pod install)
       # ------------------------------------------------------------
-      - name: Prepare icon
+      - name: Capacitor copy
+        run: npx cap copy ios
+
+      # ------------------------------------------------------------
+      # Icônes, permissions, ATS
+      # ------------------------------------------------------------
+      - name: Generate icons
         run: |
           mkdir -p assets
-          if [ -f "public/icon-512.png" ]; then cp public/icon-512.png assets/icon.png; \
-          elif [ -f "icon-512.png" ]; then cp icon-512.png assets/icon.png; fi
-
-      - name: Generate iOS icons
-        run: |
+          [ -f "public/icon-512.png" ] && cp public/icon-512.png assets/icon.png || true
           npm install -g @capacitor/assets
-          npx capacitor-assets generate --ios || echo "Icon generation skipped"
+          npx capacitor-assets generate --ios || true
 
-      - name: Add permissions & ATS for Winamax
+      - name: Add permissions & ATS
         run: |
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Microphone required'" $PLIST 2>/dev/null || true
@@ -166,10 +118,9 @@ jobs:
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
 
       # ------------------------------------------------------------
-      # Build archive and IPA
+      # Build archive et IPA
       # ------------------------------------------------------------
       - name: Build archive
         run: |
