@@ -1,4 +1,4 @@
-name: Build iOS IPA (Final Working)
+name: Build iOS IPA (Final – Full Working)
 
 on:
   workflow_dispatch:
@@ -12,40 +12,77 @@ jobs:
     runs-on: macos-14
 
     steps:
+      # --------------------------------------------------
+      # 1. Récupération du code
+      # --------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
+      # --------------------------------------------------
+      # 2. Setup Node.js (indispensable pour Capacitor)
+      # --------------------------------------------------
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      # --------------------------------------------------
+      # 3. Setup Bun (pour le build web)
+      # --------------------------------------------------
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
+      # --------------------------------------------------
+      # 4. Installation des dépendances
+      # --------------------------------------------------
       - name: Install dependencies
         run: |
           bun install
           bun add @capacitor-community/speech-recognition @capacitor/browser
 
+      # --------------------------------------------------
+      # 5. Build web (Vite)
+      # --------------------------------------------------
       - name: Build web app
         run: bun run build
 
+      # --------------------------------------------------
+      # 6. Détection du dossier web généré
+      #    (supporte dist, dist/client, build)
+      # --------------------------------------------------
       - name: Detect build folder
         id: detect
         run: |
-          if [ -d "dist" ]; then
+          if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
+            echo "web_dir=dist/client" >> $GITHUB_OUTPUT
+          elif [ -f "dist/index.html" ]; then
             echo "web_dir=dist" >> $GITHUB_OUTPUT
-          elif [ -d "build" ]; then
+          elif [ -f "build/index.html" ]; then
             echo "web_dir=build" >> $GITHUB_OUTPUT
           else
-            echo "❌ Aucun build trouvé"
+            echo "❌ Aucun index.html trouvé dans dist, dist/client ou build"
             exit 1
           fi
 
-      - name: Create Capacitor config (FIX WINAMAX)
+      # --------------------------------------------------
+      # 7. Vérification que l'index.html du build est valide
+      # --------------------------------------------------
+      - name: Validate build index.html
+        run: |
+          BUILD_INDEX="${{ steps.detect.outputs.web_dir }}/index.html"
+          if ! grep -q "assets/" "$BUILD_INDEX"; then
+            echo "❌ L'index.html ne contient pas de lien vers /assets/ (bundle Vite)"
+            cat "$BUILD_INDEX"
+            exit 1
+          fi
+          echo "✅ Build valide"
+
+      # --------------------------------------------------
+      # 8. Création du capacitor.config.ts (avec user‑agent et navigation Winamax)
+      # --------------------------------------------------
+      - name: Create Capacitor config
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -70,44 +107,135 @@ jobs:
               ]
             }
           };
-
           export default config;
           EOF
 
-      - name: Clean old iOS
+      # --------------------------------------------------
+      # 9. Nettoyage et ajout de la plateforme iOS
+      # --------------------------------------------------
+      - name: Clean iOS
         run: rm -rf ios
 
-      # --- CORRECTION ICI : Ajouter sans lancer pod install immédiatement ---
-      - name: Add iOS platform (No Pods)
-        run: npx cap add ios --no-update
+      - name: Add iOS platform
+        run: npx cap add ios
 
+      # --------------------------------------------------
+      # 10. Correction du Podfile (iOS 15.0)
+      # --------------------------------------------------
       - name: Fix Podfile deployment target
         run: |
-          # Force la plateforme à 15.0 pour supporter le plugin de parole[span_2](start_span)[span_2](end_span)
           PODFILE="ios/App/Podfile"
           sed -i '' "s/platform :ios, .*/platform :ios, '15.0'/" "$PODFILE"
           cat "$PODFILE"
 
-      - name: Capacitor sync & Update Pods
-        run: npx cap sync ios
+      # --------------------------------------------------
+      # 11. Copie du build web (fichiers critiques) vers le dossier public
+      # --------------------------------------------------
+      - name: Copy web build to public
+        run: |
+          rm -rf ios/App/App/public
+          mkdir -p ios/App/App/public
+          cp -r ${{ steps.detect.outputs.web_dir }}/* ios/App/App/public/
 
-      - name: Add permissions and Winamax Fix
+      # --------------------------------------------------
+      # 12. Copie des assets statiques (images, etc.) SANS écraser index.html ni assets/
+      # --------------------------------------------------
+      - name: Copy static assets (public folder)
+        run: |
+          if [ -d "public" ]; then
+            rsync -av --ignore-existing --exclude="index.html" public/ ios/App/App/public/
+          fi
+
+      # --------------------------------------------------
+      # 13. Copie des fichiers PWA (manifest, icônes) depuis la racine
+      # --------------------------------------------------
+      - name: Copy PWA files
+        run: |
+          cd ios/App/App/public
+          for file in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
+            if [ -f "../../../../$file" ]; then
+              cp -n "../../../../$file" .
+            fi
+          done
+
+      # --------------------------------------------------
+      # 14. Sécurité : restauration de l'index.html si écrasé
+      # --------------------------------------------------
+      - name: Restore correct index.html if needed
+        run: |
+          cd ios/App/App/public
+          if [ ! -f "index.html" ] || ! grep -q "assets/" index.html; then
+            echo "⚠️ index.html invalide, restauration depuis le build"
+            cp ${{ steps.detect.outputs.web_dir }}/index.html .
+          fi
+          # Vérification finale
+          if ! grep -q "assets/" index.html; then
+            echo "❌ Échec : index.html final toujours invalide"
+            cat index.html
+            exit 1
+          fi
+          echo "✅ index.html final valide"
+
+      # --------------------------------------------------
+      # 15. Génération des icônes iOS (via capacitor-assets)
+      # --------------------------------------------------
+      - name: Prepare icon source
+        run: |
+          mkdir -p assets
+          if [ -f "public/icon-512.png" ]; then
+            cp public/icon-512.png assets/icon.png
+          elif [ -f "icon-512.png" ]; then
+            cp icon-512.png assets/icon.png
+          elif [ -f "public/apple-touch-icon.png" ]; then
+            cp public/apple-touch-icon.png assets/icon.png
+          else
+            echo "⚠️ Aucune icône trouvée, génération sans image"
+          fi
+
+      - name: Generate iOS icons
+        run: |
+          npm install -g @capacitor/assets
+          npx capacitor-assets generate --ios
+
+      # --------------------------------------------------
+      # 16. Ajout des permissions et contournement ATS (Winamax)
+      # --------------------------------------------------
+      - name: Add permissions and Winamax ATS fix
         run: |
           PLIST="ios/App/App/Info.plist"
-          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Microphone required'" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Speech recognition required'" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Camera required'" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Photos required'" $PLIST || true
-          
-          # FIX: Déverrouillage sécurité pour Winamax[span_3](start_span)[span_3](end_span)[span_4](start_span)[span_4](end_span)
-          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST || true
 
+          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Microphone required'" $PLIST 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 'Speech recognition required'" $PLIST 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Camera required'" $PLIST 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Photos required'" $PLIST 2>/dev/null || true
+
+          # Suppression et recréation de NSAppTransportSecurity pour autoriser tout chargement (nécessaire pour Winamax)
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
+
+      # --------------------------------------------------
+      # 17. Synchronisation Capacitor (plugins, pods)
+      # --------------------------------------------------
+      - name: Capacitor sync
+        run: npx cap sync ios
+
+      # --------------------------------------------------
+      # 18. Installation manuelle des pods (par sécurité)
+      # --------------------------------------------------
+      - name: Install CocoaPods
+        run: |
+          cd ios/App
+          pod install --repo-update
+
+      # --------------------------------------------------
+      # 19. Construction de l'archive Xcode (non signée)
+      # --------------------------------------------------
       - name: Build archive
         run: |
           cd ios
+          rm -rf ~/Library/Developer/Xcode/DerivedData
           xcodebuild \
             -workspace App/App.xcworkspace \
             -scheme App \
@@ -120,12 +248,18 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
             archive
 
+      # --------------------------------------------------
+      # 20. Création du fichier .ipa
+      # --------------------------------------------------
       - name: Create IPA
         run: |
           mkdir -p Payload
           cp -R ios/App.xcarchive/Products/Applications/App.app Payload/
           zip -r app.ipa Payload
 
+      # --------------------------------------------------
+      # 21. Upload de l'IPA en tant qu'artifact
+      # --------------------------------------------------
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
