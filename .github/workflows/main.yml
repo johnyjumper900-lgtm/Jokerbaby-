@@ -1,4 +1,4 @@
-name: Build Full Project
+name: Build Full iOS Project
 on:
   push:
     branches: [ main ]
@@ -7,29 +7,49 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: 1. Récupération du code
+        uses: actions/checkout@v4[span_5](start_span)[span_5](end_span)
+
+      - name: 2. Installation de Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 20[span_6](start_span)[span_6](end_span)
 
-      - name: Install & Build
+      - name: 3. Installation et Création du dossier DIST
         run: |
-          npm install --no-package-lock
-          npm run build
-          npx cap add ios || true
-          npx cap copy ios
-          npx cap sync ios
+          npm install --no-package-lock[span_7](start_span)[span_7](end_span)
+          # Cette commande crée le dossier 'dist' avec tout ton projet compilé
+          npm run build[span_8](start_span)[span_8](end_span)
 
-      - name: Create IPA
+      - name: 4. Création du dossier IOS et Aspiration
+        run: |
+          # Crée le dossier 'ios' s'il n'existe pas
+          npx cap add ios || true[span_9](start_span)[span_9](end_span)
+          # Aspire le contenu de 'dist' vers le dossier 'ios'
+          npx cap copy ios[span_10](start_span)[span_10](end_span)
+          npx cap sync ios[span_11](start_span)[span_11](end_span)
+
+      - name: 5. Compilation de l'IPA Complet
         run: |
           cd ios/App
-          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphoneos -derivedDataPath build-data SYMROOT=$(pwd)/build-output CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" AD_HOC_CODE_SIGNING_ALLOWED=YES clean build
-          mkdir -p Payload
-          cp -r build-output/Release-iphoneos/App.app Payload/
-          zip -r ../../Full-Project.ipa Payload
+          xcodebuild -workspace App.xcworkspace \
+                     -scheme App \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     -derivedDataPath build-data \
+                     SYMROOT=$(pwd)/build-output \
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGN_IDENTITY="" \
+                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
+                     clean build[span_12](start_span)[span_12](end_span)
 
-      - name: Upload
+          mkdir -p Payload
+          cp -r build-output/Release-iphoneos/App.app Payload/[span_13](start_span)[span_13](end_span)
+          zip -r ../../Full-Project.ipa Payload[span_14](start_span)[span_14](end_span)
+
+      - name: 6. Envoi du fichier final
         uses: actions/upload-artifact@v4
         with:
-          name: Full-IPA
-          path: Full-Project.ipa
+          name: Full-IPA-Package
+          path: Full-Project.ipa[span_15](start_span)[span_15](end_span)
