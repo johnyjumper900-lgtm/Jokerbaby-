@@ -1,42 +1,26 @@
-name: Build iOS App (Bun Edition)
-on:
-  push:
-    branches: [ main ]
-
-jobs:
-  build:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Build Web Project
-        run: bun run build
-
-      - name: Setup Capacitor iOS
-        run: |
-          bun x cap add ios
-          bun x cap sync ios
-
-      # --- ÉTAPE MANQUANTE : COMPILATION NATIVE ---
-      - name: Build iOS App (Native)
+      - name: Build iOS App (Unsigned)
         run: |
           cd ios/App
-          xcodebuild -workspace App.xcworkspace -scheme App -sdk iphoneos -configuration Release archive -archivePath App.xcarchive
-          xcodebuild -exportArchive -archivePath App.xcarchive -exportOptionsPlist exportOptions.plist -exportPath output
+          # 1. Compilation sans signature (CODE_SIGNING_ALLOWED=NO)
+          xcodebuild -workspace App.xcworkspace \
+                     -scheme App \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGN_IDENTITY="" \
+                     AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-      # --- ÉTAPE INDISPENSABLE POUR RÉCUPÉRER L'IPA ---
-      - name: Upload IPA Artifact
+          # 2. Création de la structure IPA manuellement
+          mkdir -p build/Payload
+          cp -r build/Release-iphoneos/App.app build/Payload/
+          cd build
+          zip -r ../../../App-unsigned.ipa Payload
+          cd ../../..
+
+      - name: Upload Unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-app-release
-          path: ios/App/output/*.ipa
+          name: ios-unsigned-ipa
+          path: App-unsigned.ipa
           retention-days: 7
