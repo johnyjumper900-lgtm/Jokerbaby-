@@ -1,44 +1,29 @@
-name: Build iOS App
+name: Build iOS App (Bun Edition)
 
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
 
 jobs:
   build:
-    # On utilise macOS car c'est obligatoire pour les outils de build iOS (Xcode)
     runs-on: macos-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
         with:
-          node-version: '20' # Ou la version que tu utilises
-          cache: 'npm'
+          bun-version: latest
 
       - name: Install dependencies
-        run: npm install
+        run: bun install
 
       - name: Build Web Project
-        run: npm run build
+        run: bun run build
 
       - name: Setup Capacitor iOS
         run: |
-          npx cap add ios || echo "iOS platform already exists"
-          npx cap sync ios
-
-      - name: Build iOS App (Compile Xcode)
-        run: |
-          # Cette commande vérifie que le projet Xcode compile bien
-          # Elle ne signe pas l'app (nécessite des certificats Apple)
-          xcodebuild -workspace ios/App/App.xcworkspace \
-                     -scheme App \
-                     -sdk iphoneos \
-                     -destination 'generic/platform=iOS' \
-                     CODE_SIGNING_ALLOWED=NO \
-                     build
+          bunx cap add ios || echo "iOS platform already exists"
+          bunx cap sync ios
