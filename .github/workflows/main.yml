@@ -1,4 +1,4 @@
-name: Build iOS IPA (Winamax & IA – Definitif)
+name: Build iOS IPA (Full Project Copy)
 
 on:
   workflow_dispatch:
@@ -9,25 +9,16 @@ jobs:
   build-ios:
     runs-on: macos-14
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
       - name: Install dependencies
-        run: |
-          bun install
-          bun add @capacitor/browser
-          # (micro optionnel – décommenter si besoin)
-          # bun add @capacitor-community/speech-recognition
+        run: bun install
 
       - name: Build web app
         run: bun run build
@@ -40,12 +31,11 @@ jobs:
           elif [ -f "dist/index.html" ]; then
             echo "web_dir=dist" >> $GITHUB_OUTPUT
           else
-            echo "❌ No index.html found"
             exit 1
           fi
 
-      # Forcer l'inclusion d'analyzeTicket (déjà importé dans main.tsx, mais sécurité)
-      - name: Ensure analyzeTicket is in bundle
+      # Forcer l'inclusion d'analyzeTicket
+      - name: Force analyzeTicket
         run: |
           WEB_DIR="${{ steps.detect.outputs.web_dir }}"
           if ! grep -r "analyzeTicket" "$WEB_DIR" --include="*.js"; then
@@ -67,12 +57,12 @@ jobs:
           export default config;
           EOF
 
-      - name: Add iOS platform (ignore pod failure)
+      - name: Add iOS platform (ignore initial pod failure)
         run: |
           rm -rf ios
           npx cap add ios || true
 
-      - name: Force iOS 18 in Podfile and Xcode project
+      - name: Force iOS 18 in Podfile & Xcode
         run: |
           sed -i '' 's/platform :ios, .*/platform :ios, "18.0"/' ios/App/Podfile
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 18.0/g' ios/App/App.xcodeproj/project.pbxproj
@@ -82,31 +72,45 @@ jobs:
           cd ios/App
           pod install --repo-update
 
-      - name: Copy web build and public assets
+      # ------------------------------------------------------------
+      # ÉTAPE CRITIQUE : Copie de TOUT le dépôt dans le dossier public
+      # ------------------------------------------------------------
+      - name: Copy entire project (except node_modules, .git, ios, dist)
         run: |
-          rm -rf ios/App/App/public
-          mkdir -p ios/App/App/public
-          cp -r ${{ steps.detect.outputs.web_dir }}/* ios/App/App/public/
-          if [ -d "public" ]; then
-            cp -rf public/* ios/App/App/public/ 2>/dev/null || true
-          fi
-          # Copier les fichiers PWA
-          cd ios/App/App/public
+          TARGET="ios/App/App/public"
+          # On commence par copier le build web (fichiers critiques)
+          rm -rf "$TARGET"
+          mkdir -p "$TARGET"
+          cp -r ${{ steps.detect.outputs.web_dir }}/* "$TARGET/"
+          # Puis on copie TOUT le reste du dépôt, sans écraser les fichiers déjà présents
+          rsync -av --ignore-existing . "$TARGET/" \
+            --exclude node_modules \
+            --exclude .git \
+            --exclude ios \
+            --exclude dist \
+            --exclude .github
+          # Copie des fichiers PWA (manifest, icônes) à la racine (au cas où)
+          cd "$TARGET"
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
-            [ -f "../../../../$f" ] && cp -f "../../../../$f" . || true
+            [ -f "../../../../$f" ] && cp -f "../../../../$f" . 2>/dev/null || true
           done
+          # Restauration de l'index.html si écrasé par erreur
+          if ! grep -q "assets/" index.html; then
+            cp ${{ steps.detect.outputs.web_dir }}/index.html .
+          fi
+          echo "✅ Tous les fichiers du projet ont été copiés dans $TARGET"
+          echo "📊 Taille totale du dossier public : $(du -sh "$TARGET" | cut -f1)"
 
       - name: Capacitor copy
         run: npx cap copy ios
 
-      - name: Force ATS (Allows Arbitrary Loads)
+      - name: Force ATS and permissions
         run: |
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
-          # Permissions
           /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Caméra requise'" $PLIST 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Accès aux photos requis'" $PLIST 2>/dev/null || true
 
