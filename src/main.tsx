@@ -3,9 +3,8 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// 🔥 IMPORT FORCÉ – Sans cela, Vite supprime la fonction du bundle
+// FORCER l'inclusion de l'aspiration Winamax / IA
 import { analyzeTicket } from "./server-api/analyze-ticket";
-// Optionnel : exposition globale pour déboguer (console Safari)
 (window as any).analyzeTicket = analyzeTicket;
 
 import "./styles.css";
