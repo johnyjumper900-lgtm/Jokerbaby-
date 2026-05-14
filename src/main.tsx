@@ -3,6 +3,11 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+// 🔥 IMPORT FORCÉ – Sans cela, Vite supprime la fonction du bundle
+import { analyzeTicket } from "./server-api/analyze-ticket";
+// Optionnel : exposition globale pour déboguer (console Safari)
+(window as any).analyzeTicket = analyzeTicket;
+
 import "./styles.css";
 import { router } from "./router";
 
@@ -25,7 +30,7 @@ createRoot(rootEl).render(
   </StrictMode>,
 );
 
-// Hide the boot splash injected in index.html
+// Cache le splash screen
 window.setTimeout(() => {
   const el = document.getElementById("fcd-boot");
   if (!el) return;
