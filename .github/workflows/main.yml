@@ -1,4 +1,4 @@
-name: Build iOS IPA (Complete – Working)
+name: Build iOS IPA (Final – iOS 17)
 
 on:
   workflow_dispatch:
@@ -56,13 +56,12 @@ jobs:
 
       - name: Force analyzeTicket inclusion
         run: |
-          # Crée un fichier d'import factice si nécessaire
           if ! grep -r "analyzeTicket" "${{ steps.detect.outputs.web_dir }}" --include="*.js" > /dev/null; then
             echo "// Force inclusion" >> "${{ steps.detect.outputs.web_dir }}/assets/force_analyze.js"
             echo "import '../../src/server-api/analyze-ticket';" >> "${{ steps.detect.outputs.web_dir }}/assets/force_analyze.js"
           fi
 
-      - name: Create Capacitor config (iOS 16.0)
+      - name: Create Capacitor config (iOS 17.0)
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -73,7 +72,7 @@ jobs:
             webDir: '${{ steps.detect.outputs.web_dir }}',
             overrideUserAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
             ios: {
-              deploymentTarget: '16.0',
+              deploymentTarget: '17.0',
               limitsNavigationsToAppBoundDomains: false
             },
             server: {
@@ -90,12 +89,12 @@ jobs:
           rm -rf ios
           npx cap add ios
 
-      - name: Set iOS 16.0 in Podfile and Xcode project
+      - name: Set iOS 17.0 in Podfile and Xcode project
         run: |
           PODFILE="ios/App/Podfile"
-          sed -i '' "s/^platform :ios, .*/platform :ios, '16.0'/" "$PODFILE"
+          sed -i '' "s/^platform :ios, .*/platform :ios, '17.0'/" "$PODFILE"
           PROJ="ios/App/App.xcodeproj/project.pbxproj"
-          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 16.0/g' "$PROJ"
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g' "$PROJ"
 
       - name: Copy web build to public
         run: |
@@ -103,14 +102,13 @@ jobs:
           mkdir -p ios/App/App/public
           cp -r ${{ steps.detect.outputs.web_dir }}/* ios/App/App/public/
 
-      - name: Copy full static assets (public folder) – no ignore
+      - name: Copy full static assets (public folder)
         run: |
           if [ -d "public" ]; then
-            # Copie récursive, écrase si nécessaire, mais protège index.html déjà présent
             cp -rf public/* ios/App/App/public/ 2>/dev/null || true
           fi
 
-      - name: Copy PWA files (conditional)
+      - name: Copy PWA files
         run: |
           cd ios/App/App/public
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
@@ -121,7 +119,6 @@ jobs:
         run: |
           cd ios/App/App/public
           if [ ! -f "index.html" ] || ! grep -q "assets/" index.html; then
-            echo "⚠️ Restoring index.html from build"
             cp ${{ steps.detect.outputs.web_dir }}/index.html .
           fi
           if ! grep -q "assets/" index.html; then
