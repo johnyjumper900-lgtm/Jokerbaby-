@@ -26,11 +26,7 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: |
-          bun install
-          # Retrait du plugin problématique (si vous voulez le garder, passer à iOS 16)
-          bun remove @capacitor-community/speech-recognition || true
-          bun add @capacitor/browser
+        run: bun install
 
       - name: Build web app
         run: bun run build
@@ -58,7 +54,7 @@ jobs:
             exit 1
           fi
 
-      - name: Create Capacitor config
+      - name: Create Capacitor config with iOS 16.0
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -69,7 +65,7 @@ jobs:
             webDir: '${{ steps.detect.outputs.web_dir }}',
             overrideUserAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
             ios: {
-              deploymentTarget: '16.0',   // ← modifié pour éviter l'erreur pod
+              deploymentTarget: '16.0',
               limitsNavigationsToAppBoundDomains: false
             },
             server: {
@@ -77,9 +73,7 @@ jobs:
               hostname: 'app.jokerbaby.com',
               allowNavigation: [
                 "*.winamax.fr",
-                "*.winamax.com",
-                "winamax.fr",
-                "winamax.com"
+                "*.winamax.com"
               ]
             }
           };
@@ -91,32 +85,46 @@ jobs:
           rm -rf ios
           npx cap add ios
 
-      - name: Fix Podfile deployment target
+      # --------------------------------------------------
+      # FORCER iOS 16.0 DANS LE PODFILE ET PROJET XCODE
+      # --------------------------------------------------
+      - name: Set iOS deployment target to 16.0 in Podfile
         run: |
           PODFILE="ios/App/Podfile"
-          sed -i '' "s/platform :ios, .*/platform :ios, '16.0'/" "$PODFILE"
+          # Remplace la ligne platform
+          sed -i '' "s/^platform :ios, .*/platform :ios, '16.0'/" "$PODFILE"
+          # Vérifie
           cat "$PODFILE"
 
+      - name: Set deployment target in Xcode project
+        run: |
+          PROJ="ios/App/App.xcodeproj/project.pbxproj"
+          # Remplace toutes les occurrences de IPHONEOS_DEPLOYMENT_TARGET
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 16.0/g' "$PROJ"
+
+      # --------------------------------------------------
+      # Copie du build web et assets
+      # --------------------------------------------------
       - name: Copy web build to public
         run: |
           rm -rf ios/App/App/public
           mkdir -p ios/App/App/public
           cp -r ${{ steps.detect.outputs.web_dir }}/* ios/App/App/public/
 
-      - name: Copy static assets without overwriting
+      - name: Copy static assets (public folder) without overwriting
         run: |
           if [ -d "public" ]; then
             rsync -av --ignore-existing --exclude="index.html" public/ ios/App/App/public/
           fi
 
-      - name: Copy PWA files
+      - name: Copy PWA files to root
         run: |
           cd ios/App/App/public
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
-            [ -f "../../../../$f" ] && cp -n "../../../../$f" . || true
+            [ -f "../../../../$f" ] && cp -n "../../../../$f" .
           done
 
-      - name: Restore index.html if missing
+      - name: Restore correct index.html if needed
         run: |
           cd ios/App/App/public
           if [ ! -f "index.html" ] || ! grep -q "assets/" index.html; then
@@ -128,7 +136,7 @@ jobs:
           fi
 
       # --------------------------------------------------
-      # Génération icônes (optionnel, sans erreur si absent)
+      # Génération icônes (optionnel)
       # --------------------------------------------------
       - name: Prepare icon
         run: |
@@ -144,7 +152,7 @@ jobs:
           npx capacitor-assets generate --ios || echo "Génération icônes ignorée"
 
       # --------------------------------------------------
-      # Permissions et ATS
+      # Permissions et ATS pour Winamax
       # --------------------------------------------------
       - name: Add permissions and ATS
         run: |
@@ -158,6 +166,9 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
 
+      # --------------------------------------------------
+      # Capacitor sync et pod install
+      # --------------------------------------------------
       - name: Capacitor sync
         run: npx cap sync ios
 
@@ -166,6 +177,9 @@ jobs:
           cd ios/App
           pod install --repo-update
 
+      # --------------------------------------------------
+      # Build archive
+      # --------------------------------------------------
       - name: Build archive
         run: |
           cd ios
