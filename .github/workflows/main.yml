@@ -10,32 +10,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          bun-version: latest
+          node-version: 20
+          # ON NE MET PAS "cache: npm" car tu n'as pas de package-lock.json
 
-      # On installe TOUT, y compris les dépendances de dev (Capacitor CLI)
       - name: Install Dependencies
-        run: bun install
-
-      # Génération du code Web (le dossier 'dist')
-      - name: Build Web Project
-        run: bun run build
-
-      # C'est ici que le "poids" de l'app se joue
-      - name: Capacitor Setup & Sync
         run: |
-          # Installation forcée des plateformes natives
-          bun x cap add ios || true
-          # On s'assure que le contenu de 'dist' est copié dans le projet iOS
-          bun x cap copy ios
-          bun x cap sync ios
+          # On utilise --no-package-lock pour éviter l'erreur que tu as eue
+          npm install --no-package-lock 
 
-      - name: Build Native iOS (Unsigned)
+      - name: Build Web Project
+        run: npm run build
+
+      - name: Capacitor Sync
+        run: |
+          # On installe les plateformes natives si elles manquent
+          npx cap add ios || true
+          # On force la copie du dossier 'dist' (tes 40 Mo sont ici)
+          npx cap copy ios
+          npx cap sync ios
+
+      - name: Build Xcode (Unsigned)
         run: |
           cd ios/App
-          # Compilation sans signature pour éviter l'erreur de Team ID
           xcodebuild -workspace App.xcworkspace \
                      -scheme App \
                      -configuration Release \
@@ -48,12 +47,11 @@ jobs:
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      clean build
 
-          # Construction de l'IPA
           mkdir -p Payload
           cp -r build-output/Release-iphoneos/App.app Payload/
           
-          # Vérification du poids dans les logs
-          echo "Vérification de la taille de l'App :"
+          # Vérifie la taille dans les logs GitHub
+          echo "Taille de l'App :"
           du -sh Payload/App.app
           
           zip -r ../../App-unsigned.ipa Payload
@@ -63,4 +61,3 @@ jobs:
         with:
           name: full-project-ipa
           path: App-unsigned.ipa
-          if-no-files-found: error
