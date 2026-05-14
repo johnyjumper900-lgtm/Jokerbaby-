@@ -1,4 +1,4 @@
-name: Build iOS App (Full Project)
+name: Build Full iOS App (Auto-Init)
 on:
   push:
     branches: [ main ]
@@ -18,19 +18,25 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      # 1. Génération forcée du dossier 'dist' (Build Web)
       - name: Build Web Project
         run: bun run build
 
-      # Synchronise l'intégralité de ton build Web dans le dossier iOS
-      - name: Capacitor Sync
+      # 2. Initialisation et Synchronisation Capacitor
+      - name: Capacitor Init & Sync
         run: |
+          # On vérifie quel est le dossier de build web dans ton config (ex: dist)
+          # On installe Capacitor s'il n'est pas présent
+          bun install @capacitor/ios @capacitor/cli @capacitor/core
+          # On crée le dossier ios s'il n'existe pas
           bun x cap add ios || true
+          # On synchronise le build web (dist) dans le projet ios
           bun x cap sync ios
 
+      # 3. Build Xcode sans signature
       - name: Build Native iOS (Unsigned)
         run: |
           cd ios/App
-          # Compilation de l'intégralité du projet en mode Release
           xcodebuild -workspace App.xcworkspace \
                      -scheme App \
                      -configuration Release \
@@ -43,9 +49,14 @@ jobs:
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      clean build
 
-          # Création de l'IPA contenant tout le projet
+          # 4. Création de l'IPA
           mkdir -p Payload
           cp -r build-output/Release-iphoneos/App.app Payload/
+          
+          # Vérification de la taille dans les logs pour être sûr
+          echo "Taille de l'application :"
+          du -sh Payload/App.app
+          
           zip -r ../../App-unsigned.ipa Payload
 
       - name: Upload Full IPA
