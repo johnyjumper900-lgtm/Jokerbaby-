@@ -1,55 +1,42 @@
-name: Build iOS App (Bun + Capacitor)
-on:
-  push:
-    branches: [ main ]
-
-jobs:
-  build:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Build Web Project
-        run: bun run build
-
-      - name: Capacitor Sync
-        run: |
-          bun x cap add ios
-          bun x cap sync ios
-
-      - name: Build Native iOS (Unsigned)
-        run: |
-          cd ios/App
-          # On compile le projet généré par Capacitor sans signature
-          xcodebuild -workspace App.xcworkspace \
-                     -scheme App \
-                     -configuration Release \
-                     -sdk iphoneos \
-                     -derivedDataPath build-data \
-                     SYMROOT=$(pwd)/build-output \
-                     CODE_SIGNING_ALLOWED=NO \
-                     CODE_SIGNING_REQUIRED=NO \
-                     CODE_SIGN_IDENTITY="" \
-                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     clean build
-
-          # Création de la structure IPA
-          mkdir -p Payload
-          cp -r build-output/Release-iphoneos/App.app Payload/
-          zip -r ../../App-unsigned.ipa Payload
-
-      - name: Upload IPA Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-app-unsigned
-          path: App-unsigned.ipa
-          if-no-files-found: error
+- name: Build iOS IPA with Capacitor
+  run: |
+    # 1. S'assurer que le build web est fait (si pas déjà fait)
+    # npm run build
+    
+    # 2. Synchroniser Capacitor (copie le dossier www dans le projet Xcode)
+    npx cap sync ios
+    
+    # 3. Se placer dans le dossier iOS
+    cd ios
+    
+    # 4. Créer un dossier DerivedData local
+    DERIVED_DATA_PATH=$(pwd)/DerivedData
+    rm -rf "$DERIVED_DATA_PATH"
+    
+    # 5. Build avec xcodebuild (sans signature)
+    xcodebuild -workspace App/App.xcworkspace \
+               -scheme App \
+               -configuration Release \
+               -sdk iphoneos \
+               -derivedDataPath "$DERIVED_DATA_PATH" \
+               CODE_SIGNING_ALLOWED=NO \
+               CODE_SIGNING_REQUIRED=NO \
+               CODE_SIGN_IDENTITY="" \
+               AD_HOC_CODE_SIGNING_ALLOWED=YES \
+               build
+    
+    # 6. Localiser le .app généré
+    APP_PATH=$(find "$DERIVED_DATA_PATH" -name "App.app" -path "*/Release-iphoneos/*" | head -n 1)
+    if [ -z "$APP_PATH" ]; then
+      echo "❌ App.app introuvable"
+      exit 1
+    fi
+    
+    # 7. Créer l'IPA
+    mkdir -p Payload
+    cp -r "$APP_PATH" Payload/
+    zip -r ../App-unsigned.ipa Payload
+    
+    # 8. Nettoyer
+    cd ..
+    rm -rf ios/DerivedData
