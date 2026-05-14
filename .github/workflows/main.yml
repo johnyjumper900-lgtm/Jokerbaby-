@@ -1,51 +1,33 @@
-- name: Build iOS App (Unsigned)
-  run: |
-    cd ios/App
+      - name: Build iOS App (Unsigned)
+        run: |
+          cd ios/App
+          # 1. Nettoyage et installation des Pods (sécurité)
+          pod install
 
-    # 1. Nettoyer et installer les pods
-    pod install
+          # 2. Compilation forcée sans signature
+          xcodebuild -workspace App.xcworkspace \
+                     -scheme App \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGN_IDENTITY="" \
+                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
+                     clean build
 
-    # 2. Définir un dossier DerivedData propre
-    DERIVED_DATA_PATH=$(pwd)/DerivedData
-    rm -rf "$DERIVED_DATA_PATH"
+          # 3. Création manuelle de l'IPA (Structure Payload)
+          mkdir -p build/Payload
+          # On cherche l'exécutable .app généré
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "App.app" | grep "Release-iphoneos" | head -n 1)
+          cp -r "$APP_PATH" build/Payload/
+          
+          cd build
+          zip -r ../../../App-unsigned.ipa Payload
+          cd ../../..
 
-    # 3. Build (sans signature)
-    xcodebuild -workspace App.xcworkspace \
-               -scheme App \
-               -configuration Release \
-               -sdk iphoneos \
-               -derivedDataPath "$DERIVED_DATA_PATH" \
-               CODE_SIGNING_ALLOWED=NO \
-               CODE_SIGNING_REQUIRED=NO \
-               CODE_SIGN_IDENTITY="" \
-               AD_HOC_CODE_SIGNING_ALLOWED=YES \
-               clean build
-
-    # 4. Récupérer le chemin exact du .app construit
-    APP_PATH=$(find "$DERIVED_DATA_PATH" -name "App.app" | grep "Release-iphoneos" | head -n 1)
-
-    if [ -z "$APP_PATH" ]; then
-      echo "❌ App.app introuvable dans DerivedData"
-      exit 1
-    fi
-
-    echo "✅ App trouvée : $APP_PATH"
-
-    # 5. Créer la structure Payload et l'IPA
-    mkdir -p build/Payload
-    cp -r "$APP_PATH" build/Payload/
-
-    cd build
-    # L'IPA sera placée à la racine du dépôt (ios/App/build/../../../ = racine)
-    zip -r ../../../App-unsigned.ipa Payload
-    cd ..
-
-    # 6. Nettoyage optionnel pour libérer de l'espace
-    rm -rf "$DERIVED_DATA_PATH"
-
-- name: Upload Unsigned IPA
-  uses: actions/upload-artifact@v4
-  with:
-    name: ios-unsigned-app
-    path: App-unsigned.ipa
-    retention-days: 7
+      - name: Upload Unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-app
+          path: App-unsigned.ipa
+          retention-days: 7
