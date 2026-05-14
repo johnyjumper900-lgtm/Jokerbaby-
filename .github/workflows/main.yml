@@ -1,4 +1,4 @@
-name: Build iOS IPA (Full Project Copy)
+name: Build iOS IPA (Full Project – All Assets)
 
 on:
   workflow_dispatch:
@@ -34,8 +34,7 @@ jobs:
             exit 1
           fi
 
-      # Forcer l'inclusion d'analyzeTicket
-      - name: Force analyzeTicket
+      - name: Force analyzeTicket in bundle
         run: |
           WEB_DIR="${{ steps.detect.outputs.web_dir }}"
           if ! grep -r "analyzeTicket" "$WEB_DIR" --include="*.js"; then
@@ -57,7 +56,7 @@ jobs:
           export default config;
           EOF
 
-      - name: Add iOS platform (ignore initial pod failure)
+      - name: Add iOS platform (ignore pod failure)
         run: |
           rm -rf ios
           npx cap add ios || true
@@ -72,39 +71,26 @@ jobs:
           cd ios/App
           pod install --repo-update
 
-      # ------------------------------------------------------------
-      # ÉTAPE CRITIQUE : Copie de TOUT le dépôt dans le dossier public
-      # ------------------------------------------------------------
-      - name: Copy entire project (except node_modules, .git, ios, dist)
+      - name: Copy entire project to public
         run: |
           TARGET="ios/App/App/public"
-          # On commence par copier le build web (fichiers critiques)
           rm -rf "$TARGET"
           mkdir -p "$TARGET"
           cp -r ${{ steps.detect.outputs.web_dir }}/* "$TARGET/"
-          # Puis on copie TOUT le reste du dépôt, sans écraser les fichiers déjà présents
           rsync -av --ignore-existing . "$TARGET/" \
-            --exclude node_modules \
-            --exclude .git \
-            --exclude ios \
-            --exclude dist \
-            --exclude .github
-          # Copie des fichiers PWA (manifest, icônes) à la racine (au cas où)
+            --exclude node_modules --exclude .git --exclude ios --exclude dist --exclude .github
           cd "$TARGET"
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
             [ -f "../../../../$f" ] && cp -f "../../../../$f" . 2>/dev/null || true
           done
-          # Restauration de l'index.html si écrasé par erreur
           if ! grep -q "assets/" index.html; then
             cp ${{ steps.detect.outputs.web_dir }}/index.html .
           fi
-          echo "✅ Tous les fichiers du projet ont été copiés dans $TARGET"
-          echo "📊 Taille totale du dossier public : $(du -sh "$TARGET" | cut -f1)"
 
       - name: Capacitor copy
         run: npx cap copy ios
 
-      - name: Force ATS and permissions
+      - name: Disable ATS & add permissions
         run: |
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST 2>/dev/null || true
@@ -113,6 +99,7 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Caméra requise'" $PLIST 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Accès aux photos requis'" $PLIST 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'Microphone requis'" $PLIST 2>/dev/null || true
 
       - name: Build archive
         run: |
