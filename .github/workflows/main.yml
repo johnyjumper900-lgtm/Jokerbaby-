@@ -1,7 +1,7 @@
-name: Build iOS IPA with all PNG assets
+name: Build iOS IPA with all assets (Capacitor + Bun)
 
 on:
-  workflow_dispatch:          # déclenchement manuel depuis l'interface GitHub
+  workflow_dispatch:          # déclenchement manuel
   push:
     branches: [ main, master ]
 
@@ -30,18 +30,13 @@ jobs:
           # Vérifier que le dossier public existe et n'est pas vide
           if [ -d "public" ] && [ "$(ls -A public)" ]; then
             echo "📁 Copie récursive de public/ vers dist/"
-            # Copie en conservant l'arborescence
             cp -r public/* dist/
           else
             echo "⚠️ Dossier 'public' introuvable ou vide – aucune ressource supplémentaire copiée"
           fi
 
-          # Optionnel : copier également d'autres PNG dispersés (hors node_modules, dist, ios)
-          # Décommentez si nécessaire
-          # find . -type f -name "*.png" -not -path "./node_modules/*" -not -path "./dist/*" -not -path "./ios/*" -exec cp --parents {} dist/ \;
-
           echo "📄 Contenu final du dossier dist après ajout des PNG :"
-          find dist -type f -name "*.png" | head -20 || echo "  (aucun PNG trouvé)"
+          find dist -type f \( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" \) | head -20 || echo "  (aucune image trouvée)"
 
       - name: ✅ Vérification du dossier dist
         run: |
@@ -51,10 +46,19 @@ jobs:
           fi
           echo "📊 Taille totale de dist : $(du -sh dist | cut -f1)"
 
+      - name: 📱 Ajout de la plateforme iOS (si absente)
+        run: |
+          if [ ! -d "ios" ]; then
+            echo "📱 Plateforme iOS manquante – ajout en cours..."
+            bunx cap add ios
+          else
+            echo "✅ Plateforme iOS déjà présente"
+          fi
+
       - name: 🔄 Synchronisation Capacitor (copie dist vers ios)
         run: bunx cap sync ios
 
-      - name: 📱 Compilation de l'application iOS non signée
+      - name: 🛠️ Compilation de l'application iOS non signée
         run: |
           cd ios
           DERIVED_DATA_PATH=$(pwd)/DerivedData
