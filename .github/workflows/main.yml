@@ -1,42 +1,100 @@
-- name: Build iOS IPA with Capacitor
-  run: |
-    # 1. S'assurer que le build web est fait (si pas déjà fait)
-    # npm run build
-    
-    # 2. Synchroniser Capacitor (copie le dossier www dans le projet Xcode)
-    npx cap sync ios
-    
-    # 3. Se placer dans le dossier iOS
-    cd ios
-    
-    # 4. Créer un dossier DerivedData local
-    DERIVED_DATA_PATH=$(pwd)/DerivedData
-    rm -rf "$DERIVED_DATA_PATH"
-    
-    # 5. Build avec xcodebuild (sans signature)
-    xcodebuild -workspace App/App.xcworkspace \
-               -scheme App \
-               -configuration Release \
-               -sdk iphoneos \
-               -derivedDataPath "$DERIVED_DATA_PATH" \
-               CODE_SIGNING_ALLOWED=NO \
-               CODE_SIGNING_REQUIRED=NO \
-               CODE_SIGN_IDENTITY="" \
-               AD_HOC_CODE_SIGNING_ALLOWED=YES \
-               build
-    
-    # 6. Localiser le .app généré
-    APP_PATH=$(find "$DERIVED_DATA_PATH" -name "App.app" -path "*/Release-iphoneos/*" | head -n 1)
-    if [ -z "$APP_PATH" ]; then
-      echo "❌ App.app introuvable"
-      exit 1
-    fi
-    
-    # 7. Créer l'IPA
-    mkdir -p Payload
-    cp -r "$APP_PATH" Payload/
-    zip -r ../App-unsigned.ipa Payload
-    
-    # 8. Nettoyer
-    cd ..
-    rm -rf ios/DerivedData
+name: Build iOS IPA (with Capacitor)
+
+on:
+  workflow_dispatch:     # déclenchement manuel
+  push:
+    branches: [ main ]
+
+jobs:
+  build-ios:
+    runs-on: macos-latest   # nécessaire pour Xcode
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web app
+        run: npm run build
+
+      # ----- ÉTAPE CLÉ : copier des ressources supplémentaires -----
+      - name: Copy extra assets into dist
+        run: |
+          # Créer un dossier pour les assets externes s'il n'existe pas
+          # Vous pouvez adapter les chemins selon où se trouvent vos fichiers
+          # Exemple : copier depuis un dossier "extra-resources" à la racine
+          if [ -d "extra-resources" ]; then
+            echo "📦 Copie des ressources supplémentaires depuis extra-resources/"
+            cp -r extra-resources/* dist/
+          fi
+
+          # Vous pouvez aussi copier des fichiers individuels ou d'autres dossiers
+          # cp path/to/missing-file dist/
+          # cp -r path/to/missing-folder dist/
+
+          # Optionnel : copier depuis le dossier "public" s'il n'est pas déjà pris
+          if [ -d "public" ] && [ "$(ls -A public)" ]; then
+            echo "📦 Copie du dossier public/ vers dist/"
+            cp -r public/* dist/
+          fi
+
+          echo "📂 Contenu final de dist :"
+          ls -la dist/
+      # --------------------------------------------------------------
+
+      - name: Sync Capacitor iOS
+        run: |
+          npx cap sync ios
+          # Vérifier que le dossier public (www) a bien été rempli
+          echo "Contenu de ios/App/App/public :"
+          ls -la ios/App/App/public/
+
+      - name: Build unsigned IPA with xcodebuild
+        run: |
+          cd ios
+          DERIVED_DATA_PATH=$(pwd)/DerivedData
+          rm -rf "$DERIVED_DATA_PATH"
+
+          xcodebuild -workspace App/App.xcworkspace \
+                     -scheme App \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     -derivedDataPath "$DERIVED_DATA_PATH" \
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGN_IDENTITY="" \
+                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
+                     build
+
+          APP_PATH=$(find "$DERIVED_DATA_PATH" -name "App.app" -path "*/Release-iphoneos/*" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ App.app introuvable"
+            exit 1
+          fi
+
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -r ../App-unsigned.ipa Payload
+          cd ..
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-app
+          path: App-unsigned.ipa
+          retention-days: 7
+
+      - name: (Optionnel) Vérifier la taille et le contenu de l'IPA
+        run: |
+          echo "📊 Taille de l'IPA généré :"
+          ls -lh App-unsigned.ipa
+          echo "🔍 Aperçu du contenu (premiers niveaux) :"
+          unzip -l App-unsigned.ipa | head -20
