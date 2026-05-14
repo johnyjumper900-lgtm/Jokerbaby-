@@ -1,4 +1,4 @@
-name: Build Full iOS IPA + Speech + Full Project
+name: Build iOS IPA (Stable Fix)
 
 on:
   workflow_dispatch:
@@ -13,49 +13,46 @@ jobs:
 
     steps:
 
-      # ------------------------------------------------------
-      # Checkout repository
-      # ------------------------------------------------------
-      - name: Checkout repository
+      # --------------------------------------------------
+      # Checkout
+      # --------------------------------------------------
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------
-      # Setup Node
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # Node + Bun
+      # --------------------------------------------------
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # ------------------------------------------------------
-      # Setup Bun
-      # ------------------------------------------------------
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      # ------------------------------------------------------
-      # Install dependencies
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # Install deps
+      # --------------------------------------------------
       - name: Install dependencies
         run: bun install
 
-      # ------------------------------------------------------
-      # Install speech recognition plugin
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # Install speech plugin
+      # --------------------------------------------------
       - name: Install speech recognition plugin
         run: bun add @capacitor-community/speech-recognition
 
-      # ------------------------------------------------------
+      # --------------------------------------------------
       # Build web app
-      # ------------------------------------------------------
+      # --------------------------------------------------
       - name: Build web app
         run: bun run build
 
-      # ------------------------------------------------------
+      # --------------------------------------------------
       # Detect build folder
-      # ------------------------------------------------------
+      # --------------------------------------------------
       - name: Detect build folder
         id: detect
         run: |
@@ -64,14 +61,14 @@ jobs:
           elif [ -f "dist/client/index.html" ]; then
             echo "web_dir=dist/client" >> $GITHUB_OUTPUT
           else
-            echo "❌ Aucun build trouvé"
+            echo "❌ Build introuvable"
             exit 1
           fi
 
-      # ------------------------------------------------------
-      # Generate capacitor.config.ts
-      # ------------------------------------------------------
-      - name: Generate capacitor.config.ts
+      # --------------------------------------------------
+      # Capacitor config
+      # --------------------------------------------------
+      - name: Create Capacitor config
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -80,6 +77,11 @@ jobs:
             appId: 'com.jokerbaby.app',
             appName: 'Jokerbaby',
             webDir: '${{ steps.detect.outputs.web_dir }}',
+            bundledWebRuntime: false,
+
+            ios: {
+              deploymentTarget: "15.0"
+            },
 
             server: {
               cleartext: true,
@@ -87,138 +89,95 @@ jobs:
                 "*.winamax.fr",
                 "*.winamax.com"
               ]
-            },
-
-            ios: {
-              contentInset: "always"
             }
           };
 
           export default config;
           EOF
 
-      # ------------------------------------------------------
-      # Remove old iOS platform
-      # ------------------------------------------------------
-      - name: Remove old iOS platform
+      # --------------------------------------------------
+      # Remove old ios
+      # --------------------------------------------------
+      - name: Clean iOS
         run: rm -rf ios
 
-      # ------------------------------------------------------
-      # Add iOS platform (skip automatic pod install)
-      # ------------------------------------------------------
+      # --------------------------------------------------
+      # Add iOS WITHOUT breaking pods
+      # --------------------------------------------------
       - name: Add iOS platform
-        run: npx cap add ios --packagemanager npm
+        run: npx cap add ios
 
-      # ------------------------------------------------------
-      # Force iOS deployment target 15.0
-      # ------------------------------------------------------
-      - name: Force iOS deployment target
+      # --------------------------------------------------
+      # FORCE iOS 15 Podfile (IMPORTANT FIX)
+      # --------------------------------------------------
+      - name: Fix Podfile deployment target
         run: |
           PODFILE="ios/App/Podfile"
-          sed -i '' 's/platform :ios, .*/platform :ios, '\''15.0'\''/' "$PODFILE"
-          echo "📱 Podfile:"
+
+          sed -i '' "s/platform :ios, .*/platform :ios, '15.0'/" "$PODFILE"
+
+          echo "📱 Podfile corrigé :"
           cat "$PODFILE"
 
-      # ------------------------------------------------------
-      # Install CocoaPods
-      # ------------------------------------------------------
-      - name: Install CocoaPods dependencies
+      # --------------------------------------------------
+      # Install CocoaPods manually
+      # --------------------------------------------------
+      - name: Install CocoaPods
         run: |
           cd ios/App
           pod repo update
           pod install
 
-      # ------------------------------------------------------
+      # --------------------------------------------------
       # Capacitor sync
-      # ------------------------------------------------------
+      # --------------------------------------------------
       - name: Capacitor sync
         run: npx cap sync ios
 
-      # ------------------------------------------------------
-      # Configure iOS permissions
-      # ------------------------------------------------------
-      - name: Configure iOS permissions
+      # --------------------------------------------------
+      # iOS permissions (micro + speech)
+      # --------------------------------------------------
+      - name: iOS permissions
         run: |
           PLIST="ios/App/App/Info.plist"
 
-          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Microphone access is required" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string Speech recognition is required" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string Camera access is required" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string Photo library access is required" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string Save photos permission required" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSLocationWhenInUseUsageDescription string Location access is required" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSBluetoothAlwaysUsageDescription string Bluetooth access is required" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" $PLIST || true
-
-      # ------------------------------------------------------
-      # Enable arbitrary web access (CORS / external sites)
-      # ------------------------------------------------------
-      - name: Enable arbitrary web access
-        run: |
-          PLIST="ios/App/App/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Microphone required" $PLIST || true
+          /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string Speech recognition required" $PLIST || true
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string Camera required" $PLIST || true
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string Photos required" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST || true
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST || true
 
-      # ------------------------------------------------------
-      # Clean public folder
-      # ------------------------------------------------------
-      - name: Clean iOS public folder
+      # --------------------------------------------------
+      # Copy web build
+      # --------------------------------------------------
+      - name: Copy build
         run: |
           rm -rf ios/App/App/public/*
-          mkdir -p ios/App/App/public
+          cp -R ${{ steps.detect.outputs.web_dir }}/. ios/App/App/public/
 
-      # ------------------------------------------------------
-      # Copy web build
-      # ------------------------------------------------------
-      - name: Copy Vite build
-        run: cp -R ${{ steps.detect.outputs.web_dir }}/. ios/App/App/public/
-
-      # ------------------------------------------------------
-      # Copy public assets
-      # ------------------------------------------------------
-      - name: Copy public assets
-        run: |
-          if [ -d "public" ]; then
-            rsync -av public/ ios/App/App/public/
-          fi
-
-      # ------------------------------------------------------
-      # Force copy entire project
-      # ------------------------------------------------------
-      - name: Force copy full project
+      # --------------------------------------------------
+      # Copy full project (optional heavy export)
+      # --------------------------------------------------
+      - name: Copy full project
         run: |
           mkdir -p ios/App/App/public/fullproject
+
           rsync -av ./ ios/App/App/public/fullproject/ \
             --exclude ios \
             --exclude node_modules \
             --exclude .git \
-            --exclude dist \
-            --exclude coverage \
-            --exclude .next
+            --exclude dist
 
-      # ------------------------------------------------------
-      # Verify files
-      # ------------------------------------------------------
-      - name: Verify copied files
-        run: |
-          echo "📁 iOS public folder:"
-          ls -lah ios/App/App/public
-          echo "📦 Full project size:"
-          du -sh ios/App/App/public/fullproject
-          if [ ! -f "ios/App/App/public/index.html" ]; then
-            echo "❌ index.html missing"
-            exit 1
-          fi
-
-      # ------------------------------------------------------
-      # Build iOS app
-      # ------------------------------------------------------
-      - name: Build iOS app
+      # --------------------------------------------------
+      # Build iOS
+      # --------------------------------------------------
+      - name: Build iOS
         run: |
           cd ios
+
           rm -rf ~/Library/Developer/Xcode/DerivedData
+
           xcodebuild \
             -workspace App/App.xcworkspace \
             -scheme App \
@@ -230,33 +189,27 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             archive
 
-      # ------------------------------------------------------
-      # Package IPA
-      # ------------------------------------------------------
-      - name: Package IPA
+      # --------------------------------------------------
+      # Create IPA
+      # --------------------------------------------------
+      - name: Create IPA
         run: |
           cd ios
+
           mkdir Payload
-          APP_PATH=$(find App.xcarchive -name "*.app" | head -1)
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ App.app not found"
-            exit 1
-          fi
-          cp -R "$APP_PATH" Payload/App.app
-          ditto -c -k --sequesterRsrc --keepParent Payload ../Jokerbaby-Full.ipa
 
-      # ------------------------------------------------------
-      # Show IPA size
-      # ------------------------------------------------------
-      - name: Show IPA size
-        run: ls -lh Jokerbaby-Full.ipa
+          APP=$(find App.xcarchive -name "*.app" | head -1)
 
-      # ------------------------------------------------------
+          cp -R "$APP" Payload/App.app
+
+          ditto -c -k --sequesterRsrc --keepParent Payload ../app.ipa
+
+      # --------------------------------------------------
       # Upload IPA
-      # ------------------------------------------------------
+      # --------------------------------------------------
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: jokerbaby-ios-full
-          path: Jokerbaby-Full.ipa
+          name: ios-ipa
+          path: app.ipa
           retention-days: 7
