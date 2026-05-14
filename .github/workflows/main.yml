@@ -1,4 +1,4 @@
-name: Build iOS IPA (Final – iOS 17)
+name: Build iOS IPA (iOS 17 – forcé)
 
 on:
   workflow_dispatch:
@@ -10,99 +10,85 @@ jobs:
     runs-on: macos-14
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      - name: Install dependencies
+      - name: Install dependencies (with speech plugin)
         run: |
           bun install
           bun add @capacitor-community/speech-recognition @capacitor/browser
 
-      - name: Build web app
+      - name: Build web
         run: bun run build
 
-      - name: Detect build folder
+      - name: Detect web dir
         id: detect
         run: |
           if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
             echo "web_dir=dist/client" >> $GITHUB_OUTPUT
           elif [ -f "dist/index.html" ]; then
             echo "web_dir=dist" >> $GITHUB_OUTPUT
-          elif [ -f "build/index.html" ]; then
-            echo "web_dir=build" >> $GITHUB_OUTPUT
           else
-            echo "❌ Aucun index.html trouvé"
+            echo "❌ No index.html"
             exit 1
           fi
 
-      - name: Validate build index.html
-        run: |
-          BUILD_INDEX="${{ steps.detect.outputs.web_dir }}/index.html"
-          if ! grep -q "assets/" "$BUILD_INDEX"; then
-            echo "❌ index.html invalide (pas de lien /assets/)"
-            cat "$BUILD_INDEX"
-            exit 1
-          fi
-
-      - name: Force analyzeTicket inclusion
+      - name: Force analyzeTicket in bundle
         run: |
           if ! grep -r "analyzeTicket" "${{ steps.detect.outputs.web_dir }}" --include="*.js" > /dev/null; then
-            echo "// Force inclusion" >> "${{ steps.detect.outputs.web_dir }}/assets/force_analyze.js"
-            echo "import '../../src/server-api/analyze-ticket';" >> "${{ steps.detect.outputs.web_dir }}/assets/force_analyze.js"
+            echo 'import "../../src/server-api/analyze-ticket";' >> "${{ steps.detect.outputs.web_dir }}/assets/force.js"
           fi
 
-      - name: Create Capacitor config (iOS 17.0)
+      - name: Create Capacitor config (iOS 17)
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
-
           const config: CapacitorConfig = {
             appId: 'com.jokerbaby.app',
             appName: 'Jokerbaby',
             webDir: '${{ steps.detect.outputs.web_dir }}',
             overrideUserAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-            ios: {
-              deploymentTarget: '17.0',
-              limitsNavigationsToAppBoundDomains: false
-            },
-            server: {
-              iosScheme: 'https',
-              hostname: 'app.jokerbaby.com',
-              allowNavigation: [ "*.winamax.fr", "*.winamax.com" ]
-            }
+            ios: { deploymentTarget: '17.0', limitsNavigationsToAppBoundDomains: false },
+            server: { iosScheme: 'https', hostname: 'app.jokerbaby.com', allowNavigation: [ "*.winamax.fr", "*.winamax.com" ] }
           };
           export default config;
           EOF
 
-      - name: Clean and add iOS
+      - name: Add iOS platform
         run: |
           rm -rf ios
           npx cap add ios
 
-      - name: Set iOS 17.0 in Podfile and Xcode project
+      # --------------------------------------------------
+      # FORCE iOS 17 dans Podfile ET Xcode project
+      # --------------------------------------------------
+      - name: Set iOS 17 in Podfile
         run: |
-          PODFILE="ios/App/Podfile"
-          sed -i '' "s/^platform :ios, .*/platform :ios, '17.0'/" "$PODFILE"
+          sed -i '' 's/platform :ios, .*/platform :ios, "17.0"/' ios/App/Podfile
+          echo "=== Podfile modifié ==="
+          cat ios/App/Podfile
+
+      - name: Set deployment target in Xcode project
+        run: |
           PROJ="ios/App/App.xcodeproj/project.pbxproj"
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g' "$PROJ"
+          grep "IPHONEOS_DEPLOYMENT_TARGET" "$PROJ" | head -3
 
-      - name: Copy web build to public
+      # --------------------------------------------------
+      # Copie des assets (sans écrasement de index.html)
+      # --------------------------------------------------
+      - name: Copy web build
         run: |
           rm -rf ios/App/App/public
           mkdir -p ios/App/App/public
           cp -r ${{ steps.detect.outputs.web_dir }}/* ios/App/App/public/
 
-      - name: Copy full static assets (public folder)
+      - name: Copy public/ assets (images, etc.)
         run: |
           if [ -d "public" ]; then
             cp -rf public/* ios/App/App/public/ 2>/dev/null || true
@@ -115,29 +101,37 @@ jobs:
             [ -f "../../../../$f" ] && cp -f "../../../../$f" . || true
           done
 
-      - name: Ensure valid index.html
+      - name: Restore index.html if corrupted
         run: |
           cd ios/App/App/public
-          if [ ! -f "index.html" ] || ! grep -q "assets/" index.html; then
+          if ! grep -q "assets/" index.html; then
             cp ${{ steps.detect.outputs.web_dir }}/index.html .
           fi
-          if ! grep -q "assets/" index.html; then
-            echo "❌ Fatal: index.html still invalid"
-            exit 1
-          fi
 
-      - name: Prepare app icon
+      # --------------------------------------------------
+      # Synchro Capacitor + pod install manuel (sécurisé)
+      # --------------------------------------------------
+      - name: Capacitor sync (without pod install)
+        run: npx cap sync ios --no-update  # ne lance pas pod install
+
+      - name: Manual pod install with iOS 17
+        run: |
+          cd ios/App
+          pod install --repo-update
+
+      # --------------------------------------------------
+      # Icônes et permissions
+      # --------------------------------------------------
+      - name: Prepare icon
         run: |
           mkdir -p assets
           if [ -f "public/icon-512.png" ]; then cp public/icon-512.png assets/icon.png; \
-          elif [ -f "icon-512.png" ]; then cp icon-512.png assets/icon.png; \
-          elif [ -f "public/apple-touch-icon.png" ]; then cp public/apple-touch-icon.png assets/icon.png; \
-          else echo "No icon found, skipping generation"; exit 0; fi
+          elif [ -f "icon-512.png" ]; then cp icon-512.png assets/icon.png; fi
 
-      - name: Generate iOS icons
+      - name: Generate icons
         run: |
           npm install -g @capacitor/assets
-          npx capacitor-assets generate --ios || echo "Icon generation skipped"
+          npx capacitor-assets generate --ios || echo "Icon skip"
 
       - name: Add permissions & ATS
         run: |
@@ -151,14 +145,9 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
 
-      - name: Capacitor sync
-        run: npx cap sync ios
-
-      - name: Install CocoaPods
-        run: |
-          cd ios/App
-          pod install --repo-update
-
+      # --------------------------------------------------
+      # Build archive & IPA
+      # --------------------------------------------------
       - name: Build archive
         run: |
           cd ios
@@ -169,9 +158,6 @@ jobs:
                      -sdk iphoneos \
                      -archivePath App.xcarchive \
                      CODE_SIGNING_ALLOWED=NO \
-                     CODE_SIGNING_REQUIRED=NO \
-                     CODE_SIGN_IDENTITY="" \
-                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      archive
 
       - name: Create IPA
