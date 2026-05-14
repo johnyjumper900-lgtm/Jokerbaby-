@@ -49,7 +49,7 @@ function normalizeTicket(raw: Record<string, unknown>) {
         option: String(pick.option || pick.selection || pick.pick || "Sélection").trim(),
         type: String(pick.type || pick.market || pick.betType || "Pari").trim(),
         odds,
-      } satisfies NormalizedPick;
+      };
     })
     .filter((pick): pick is NormalizedPick => pick !== null);
   return {
@@ -67,63 +67,43 @@ const _analyzeTicketSchema = z.object({
 });
 
 export async function analyzeTicket(rawInput: unknown) {
-  console.log("🚀 analyzeTicket called with", rawInput);
+  console.log("🚀 analyzeTicket called", rawInput);
   try {
     const data = _analyzeTicketSchema.parse(rawInput);
-    console.log("✅ Input parsed");
-    
     let LOVABLE_API_KEY = "";
     if (typeof localStorage !== "undefined") {
-      LOVABLE_API_KEY = localStorage.getItem("magic.gemini_key") || "";
-      console.log("🔑 localStorage key present:", !!LOVABLE_API_KEY);
-    } else {
-      console.warn("localStorage not available");
+      LOVABLE_API_KEY = localStorage.getItem("magic_gemini_key") || "";
+      console.log("🔑 Key present:", !!LOVABLE_API_KEY);
     }
-    if (!LOVABLE_API_KEY) throw new Error("Aucune clé Gemini configurée (Paramètres)");
+    if (!LOVABLE_API_KEY) throw new Error("Aucune clé Gemini configurée");
 
     const text = (data.text || "").trim();
     const dataUrl = data.fileBase64 ? (data.fileBase64.startsWith("data:") ? data.fileBase64 : `data:${data.mimeType || "image/jpeg"};base64,${data.fileBase64}`) : "";
-    if (!text && !dataUrl) throw new Error("Aucun ticket à lire");
-    console.log("📄 text length:", text.length, "hasImage:", !!dataUrl);
+    if (!text && !dataUrl) throw new Error("Aucun ticket");
 
-    const userContent: Array<Record<string, unknown>> = [
-      {
-        type: "text",
-        text: "Lis le ticket de pari sportif fourni. ... Texte collé si présent:\n" + text,
-      },
-    ];
-    if (dataUrl) {
-      userContent.push({ type: "image_url", image_url: { url: dataUrl } });
-    }
+    const userContent: any = [{ type: "text", text: "Lis le ticket de pari sportif fourni...\n" + text }];
+    if (dataUrl) userContent.push({ type: "image_url", image_url: { url: dataUrl } });
 
-    console.log("🌐 Calling Lovable API...");
     const aiResp = await fetch(LOVABLE_API_URL, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: dataUrl ? "google/gemini-2.5-flash" : "google/gemini-2.5-flash-lite",
         messages: [
-          { role: "system", content: "Tu es un OCR expert de tickets de paris sportifs. Tu réponds uniquement en JSON valide." },
+          { role: "system", content: "Tu es un OCR expert. Réponds uniquement en JSON." },
           { role: "user", content: userContent }
         ],
         response_format: { type: "json_object" },
       }),
     });
-    console.log("📡 Response status:", aiResp.status);
-    if (!aiResp.ok) {
-      const errorText = await aiResp.text();
-      console.error("API error body:", errorText);
-      throw new Error(`Lecture IA impossible (${aiResp.status})`);
-    }
+    console.log("📡 API status:", aiResp.status);
+    if (!aiResp.ok) throw new Error(`API error ${aiResp.status}`);
+
     const aiJson = await aiResp.json();
     const content = cleanJsonText(aiJson?.choices?.[0]?.message?.content || "{}");
-    console.log("📝 Cleaned content:", content.slice(0, 200));
     const parsed = JSON.parse(content);
     const result = normalizeTicket(parsed);
-    console.log("🎉 Success, result:", result);
+    console.log("🎉 Result:", result);
     return result;
   } catch (err) {
     console.error("❌ analyzeTicket error:", err);
