@@ -1,33 +1,55 @@
-      - name: Build iOS App (Unsigned)
+name: Build iOS App (Bun + Capacitor)
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build Web Project
+        run: bun run build
+
+      - name: Capacitor Sync
+        run: |
+          bun x cap add ios
+          bun x cap sync ios
+
+      - name: Build Native iOS (Unsigned)
         run: |
           cd ios/App
-          # 1. Nettoyage et installation des Pods (sécurité)
-          pod install
-
-          # 2. Compilation forcée sans signature
+          # On compile le projet généré par Capacitor sans signature
           xcodebuild -workspace App.xcworkspace \
                      -scheme App \
                      -configuration Release \
                      -sdk iphoneos \
+                     -derivedDataPath build-data \
+                     SYMROOT=$(pwd)/build-output \
                      CODE_SIGNING_ALLOWED=NO \
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGN_IDENTITY="" \
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
                      clean build
 
-          # 3. Création manuelle de l'IPA (Structure Payload)
-          mkdir -p build/Payload
-          # On cherche l'exécutable .app généré
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "App.app" | grep "Release-iphoneos" | head -n 1)
-          cp -r "$APP_PATH" build/Payload/
-          
-          cd build
-          zip -r ../../../App-unsigned.ipa Payload
-          cd ../../..
+          # Création de la structure IPA
+          mkdir -p Payload
+          cp -r build-output/Release-iphoneos/App.app Payload/
+          zip -r ../../App-unsigned.ipa Payload
 
-      - name: Upload Unsigned IPA
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ios-unsigned-app
+          name: ios-app-unsigned
           path: App-unsigned.ipa
-          retention-days: 7
+          if-no-files-found: error
