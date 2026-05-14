@@ -1,63 +1,30 @@
-name: Build Full iOS App
+name: Build Full iOS App (Icons + Assets)
 on:
   push:
     branches: [ main ]
-
-jobs:
-  build:
+jobs: build:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
         with:
-          node-version: 20
-          # ON NE MET PAS "cache: npm" car tu n'as pas de package-lock.json
-
+          bun-version: latest
       - name: Install Dependencies
         run: |
-          # On utilise --no-package-lock pour éviter l'erreur que tu as eue
-          npm install --no-package-lock 
-
+          bun install
+          bun add -d @capacitor/assets
       - name: Build Web Project
-        run: npm run build
-
+        run: bun run build
+      - name: Generate Assets (Icons & Splash)
+        run: |
+          # Assurez-vous d'avoir assets/logo.png ou resources/icon.png
+          # Cette commande crée les icônes pour Xcode
+          bun x capacitor-assets generate --ios
       - name: Capacitor Sync
         run: |
-          # On installe les plateformes natives si elles manquent
-          npx cap add ios || true
-          # On force la copie du dossier 'dist' (tes 40 Mo sont ici)
-          npx cap copy ios
-          npx cap sync ios
-
-      - name: Build Xcode (Unsigned)
-        run: |
-          cd ios/App
-          xcodebuild -workspace App.xcworkspace \
-                     -scheme App \
-                     -configuration Release \
-                     -sdk iphoneos \
-                     -derivedDataPath build-data \
-                     SYMROOT=$(pwd)/build-output \
-                     CODE_SIGNING_ALLOWED=NO \
-                     CODE_SIGNING_REQUIRED=NO \
-                     CODE_SIGN_IDENTITY="" \
-                     AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     clean build
-
-          mkdir -p Payload
-          cp -r build-output/Release-iphoneos/App.app Payload/
-          
-          # Vérifie la taille dans les logs GitHub
-          echo "Taille de l'App :"
-          du -sh Payload/App.app
-          
-          zip -r ../../App-unsigned.ipa Payload
-
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-project-ipa
-          path: App-unsigned.ipa
+          bun x cap add ios || true
+          bun x cap copy ios
+          bun x cap sync ios
+- name: Build Native iOS (Unsigned)
