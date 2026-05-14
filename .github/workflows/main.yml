@@ -1,4 +1,4 @@
-name: Build Full iOS IPA
+name: Build Full iOS IPA + Micro + Web Access
 
 on:
   workflow_dispatch:
@@ -12,6 +12,7 @@ jobs:
     runs-on: macos-14
 
     steps:
+
       ########################################################
       # CHECKOUT
       ########################################################
@@ -19,32 +20,42 @@ jobs:
         uses: actions/checkout@v4
 
       ########################################################
-      # NODE + BUN
+      # NODE
       ########################################################
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      ########################################################
+      # BUN
+      ########################################################
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
       ########################################################
-      # INSTALL
+      # INSTALL DEPENDENCIES
       ########################################################
       - name: Install dependencies
         run: bun install
 
       ########################################################
-      # BUILD VITE
+      # INSTALL CAPACITOR SPEECH
+      ########################################################
+      - name: Install speech recognition plugin
+        run: |
+          bun add @capacitor-community/speech-recognition
+
+      ########################################################
+      # BUILD APP
       ########################################################
       - name: Build web app
         run: bun run build
 
       ########################################################
-      # DETECT BUILD FOLDER
+      # DETECT BUILD
       ########################################################
       - name: Detect build folder
         id: detect
@@ -59,9 +70,9 @@ jobs:
           fi
 
       ########################################################
-      # CAPACITOR CONFIG
+      # GENERATE CAPACITOR CONFIG
       ########################################################
-      - name: Generate Capacitor config
+      - name: Generate capacitor.config.ts
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -70,40 +81,95 @@ jobs:
             appId: 'com.jokerbaby.app',
             appName: 'Jokerbaby',
             webDir: '${{ steps.detect.outputs.web_dir }}',
-            bundledWebRuntime: false
+            bundledWebRuntime: false,
+
+            server: {
+              cleartext: true,
+              allowNavigation: [
+                "*.winamax.fr",
+                "*.winamax.com"
+              ]
+            },
+
+            ios: {
+              contentInset: "always"
+            }
           };
 
           export default config;
           EOF
 
       ########################################################
+      # REMOVE OLD IOS
+      ########################################################
+      - name: Remove old iOS platform
+        run: rm -rf ios
+
+      ########################################################
       # ADD IOS
       ########################################################
       - name: Add iOS platform
-        run: |
-          rm -rf ios
-          npx cap add ios
+        run: npx cap add ios
 
       ########################################################
-      # SYNC CAPACITOR
+      # CONFIGURE IOS PERMISSIONS
+      ########################################################
+      - name: Configure iOS permissions
+        run: |
+          PLIST="ios/App/App/Info.plist"
+
+          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Microphone access is required for voice features" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string Speech recognition is required" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string Camera access is required" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string Photo access is required" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryAddUsageDescription string Photo save access is required" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSBluetoothAlwaysUsageDescription string Bluetooth access is required" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSLocationWhenInUseUsageDescription string Location access is required" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSLocationAlwaysAndWhenInUseUsageDescription string Location access is required" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" $PLIST || true
+
+      ########################################################
+      # ALLOW WEB ACCESS
+      ########################################################
+      - name: Enable arbitrary web access
+        run: |
+          PLIST="ios/App/App/Info.plist"
+
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST || true
+
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST || true
+
+      ########################################################
+      # CAPACITOR SYNC
       ########################################################
       - name: Capacitor sync
         run: npx cap sync ios
 
       ########################################################
-      # CLEAN PUBLIC
+      # CLEAN PUBLIC FOLDER
       ########################################################
-      - name: Clean iOS public folder
+      - name: Clean public folder
         run: |
           rm -rf ios/App/App/public/*
           mkdir -p ios/App/App/public
 
       ########################################################
-      # COPY WEB BUILD
+      # COPY BUILD
       ########################################################
-      - name: Copy web build
+      - name: Copy build files
         run: |
-          echo "📦 Copie du build Vite..."
           cp -R ${{ steps.detect.outputs.web_dir }}/. ios/App/App/public/
 
       ########################################################
@@ -112,17 +178,14 @@ jobs:
       - name: Copy public assets
         run: |
           if [ -d "public" ]; then
-            echo "📁 Copie dossier public..."
             rsync -av public/ ios/App/App/public/
           fi
 
       ########################################################
-      # FORCE COPY ENTIRE PROJECT
+      # FORCE COPY FULL PROJECT
       ########################################################
       - name: Force copy full project
         run: |
-          echo "📦 Copie complète du projet..."
-
           mkdir -p ios/App/App/public/fullproject
 
           rsync -av ./ ios/App/App/public/fullproject/ \
@@ -130,18 +193,18 @@ jobs:
             --exclude node_modules \
             --exclude .git \
             --exclude dist \
-            --exclude .next \
-            --exclude coverage
+            --exclude coverage \
+            --exclude .next
 
       ########################################################
       # VERIFY FILES
       ########################################################
       - name: Verify copied files
         run: |
-          echo "📁 Public folder :"
+          echo "📁 Public :"
           ls -lah ios/App/App/public
 
-          echo "📁 Full project size :"
+          echo "📦 Full project size :"
           du -sh ios/App/App/public/fullproject
 
           if [ ! -f "ios/App/App/public/index.html" ]; then
@@ -150,7 +213,7 @@ jobs:
           fi
 
       ########################################################
-      # BUILD IOS APP
+      # BUILD IOS
       ########################################################
       - name: Build iOS app
         run: |
@@ -170,7 +233,7 @@ jobs:
             archive
 
       ########################################################
-      # CREATE IPA
+      # PACKAGE IPA
       ########################################################
       - name: Package IPA
         run: |
