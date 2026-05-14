@@ -170,14 +170,13 @@ function bestFallbackPrediction(m: InputMatch): Prediction {
       luckFactor: 35,
     },
   ];
-  // Mode "1 prono unique" : on garde le pari avec le meilleur compromis confiance × value.
-  // Mode "1 prono unique" : compromis confiance × value, MAIS rotation par hash
-  // de l'id du match pour éviter le pattern paresseux « toujours 1N + Plus 1.5 ».
+
+  // Correction apportée ici : ajout de }); pour fermer le .sort()
   list.sort((a, b) => {
     const sa = (a.confidence ?? a.probability) * Math.max(1, a.valueScore);
     const sb = (b.confidence ?? b.probability) * Math.max(1, b.valueScore);
     return sb - sa;
-  }
+  });
 
   // Force la diversité : on shuffle le tirage selon le hash de l'id pour ne pas
   // sortir systématiquement la même famille de pari sur tous les matchs.
@@ -416,7 +415,6 @@ export async function analyzeMatches(data: unknown) {
   const stake = Number(payload.stake) || 10;
   if (!matches.length) return { predictions: [] };
 
-  // SPA: no server env. Pull user-supplied Gemini key from local storage.
   const LOVABLE_API_KEY = (typeof localStorage !== "undefined" && localStorage.getItem("magic.gemini_key")) || "";
   if (!LOVABLE_API_KEY) {
     return { predictions: matches.flatMap(fallbackPredictions) };
@@ -519,7 +517,6 @@ Règles de marchés à respecter :\n\n${SYSTEM_PROMPT}`
         parsed = {};
       }
     }
-    // Compatibilité : si pas de tool_call, tente parse du content brut.
     if (!parsed.predictions) {
       const content = aiJson?.choices?.[0]?.message?.content;
       if (typeof content === "string") {
@@ -563,8 +560,6 @@ Règles de marchés à respecter :\n\n${SYSTEM_PROMPT}`
       })
       .filter((p): p is Prediction => p !== null);
 
-    // Garantit 1 prono UNIQUE par match — on garde le meilleur si l'IA en a renvoyé plusieurs,
-    // et on complète au fallback pour les matchs que l'IA aurait ignorés.
     const bestByMatch = new Map<string, Prediction>();
     for (const p of predictions) {
       const cur = bestByMatch.get(p.matchId);
@@ -572,21 +567,14 @@ Règles de marchés à respecter :\n\n${SYSTEM_PROMPT}`
       const curScore = cur ? (cur.confidence ?? cur.probability) * Math.max(1, cur.valueScore) : -1;
       if (!cur || score > curScore) bestByMatch.set(p.matchId, p);
     }
-    // En mode confidence_100, on autorise l'IA à ignorer/filtrer les matchs trop risqués.
-    // En mode standard, ou si l'IA s'est complètement plantée (0 pari validé), on force le fallback complet.
     if (mode === "standard" || bestByMatch.size === 0) {
       for (const m of matches) {
         if (!bestByMatch.has(m.id)) bestByMatch.set(m.id, bestFallbackPrediction(m));
       }
     }
     
-    // Conserve l'ordre d'origine des matchs, mais exclut les matchs filtrés.
     const ordered = matches.map((m) => bestByMatch.get(m.id)).filter((p): p is Prediction => Boolean(p));
-
-    // Diversification : empêche le pattern paresseux (mêmes marchés répétés).
     const diversified = diversifyPredictions(ordered, matches);
-
-    // Calcul value bets enrichi
     const enriched = diversified.map((p) => {
       const v = assessValue(p.probability, p.odds);
       return { ...p, edgePct: v.edgePct, valueLevel: v.level, valueLabel: v.label };
@@ -602,7 +590,7 @@ Règles de marchés à respecter :\n\n${SYSTEM_PROMPT}`
         const valueBets = enriched.filter((p) => p.valueLevel !== "neutral");
         const reasoning = enriched.map((p) => `• ${p.match} → ${p.label} (${p.odds}) — ${p.reasoning}`).join("\n");
         const altSystem = enriched.length >= 3 ? (enriched.length >= 4 ? "Système 3/4 ou Lucky 15" : "Système 2/3") : null;
-        const kelly = stake * 0.05; // bankroll prudent : 5%
+        const kelly = stake * 0.05;
         const { data: ins, error } = await supabaseAdmin
           .from("magic_analyses" as never)
           .insert([{
@@ -631,4 +619,4 @@ Règles de marchés à respecter :\n\n${SYSTEM_PROMPT}`
     console.error("[analyze-matches] server error:", e);
     return { predictions: matches.flatMap(fallbackPredictions), _aiFallback: true };
   }
-});
+}
