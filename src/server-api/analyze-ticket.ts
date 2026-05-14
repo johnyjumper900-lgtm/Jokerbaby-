@@ -14,8 +14,7 @@ interface NormalizedPick {
 function cleanJsonText(content: string) {
   // Utilisation de constructeurs RegExp pour éviter les erreurs de "Unterminated regular expression" dues aux sauts de ligne
   const startPattern = new RegExp("^```(?:json)?", "i");
-  const endPattern = new RegExp("
-```$", "i");
+  const endPattern = /\n```$/i;  // ✅ Correction : regex littérale avec \n
   return content.replace(startPattern, "").replace(endPattern, "").trim();
 }
 
