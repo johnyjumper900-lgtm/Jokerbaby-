@@ -1,13 +1,11 @@
 name: Build iOS App (Bun Edition)
-
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: macos-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,5 +23,20 @@ jobs:
 
       - name: Setup Capacitor iOS
         run: |
-          bunx cap add ios || echo "iOS platform already exists"
-          bunx cap sync ios
+          bun x cap add ios
+          bun x cap sync ios
+
+      # --- ÉTAPE MANQUANTE : COMPILATION NATIVE ---
+      - name: Build iOS App (Native)
+        run: |
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace -scheme App -sdk iphoneos -configuration Release archive -archivePath App.xcarchive
+          xcodebuild -exportArchive -archivePath App.xcarchive -exportOptionsPlist exportOptions.plist -exportPath output
+
+      # --- ÉTAPE INDISPENSABLE POUR RÉCUPÉRER L'IPA ---
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app-release
+          path: ios/App/output/*.ipa
+          retention-days: 7
