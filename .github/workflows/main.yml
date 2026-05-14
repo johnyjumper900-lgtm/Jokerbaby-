@@ -10,18 +10,26 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 22               # ← CHANGÉ : 22 au lieu de 20
+          node-version: 22
+
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
+      # ────────────────────────────────────────────
+      # Dépendances
+      # ────────────────────────────────────────────
       - name: Install dependencies
         run: |
           bun install
           bun add @capacitor/cli @capacitor/ios @capacitor/browser
 
+      # ────────────────────────────────────────────
+      # Build web
+      # ────────────────────────────────────────────
       - name: Build web app
         run: bun run build
 
@@ -29,107 +37,178 @@ jobs:
         id: detect
         run: |
           if [ -d "dist/client" ] && [ -f "dist/client/index.html" ]; then
-            echo "web_dir=dist/client" >> $GITHUB_OUTPUT
+            echo "web_dir=dist/client" >> "$GITHUB_OUTPUT"
           elif [ -f "dist/index.html" ]; then
-            echo "web_dir=dist" >> $GITHUB_OUTPUT
+            echo "web_dir=dist" >> "$GITHUB_OUTPUT"
           else
+            echo "❌ Aucun dossier web valide trouvé."
             exit 1
           fi
 
-      - name: Force analyzeTicket in bundle
+      # ────────────────────────────────────────────
+      # Capacitor config
+      # ────────────────────────────────────────────
+      - name: Create Capacitor config
         run: |
           WEB_DIR="${{ steps.detect.outputs.web_dir }}"
-          if ! grep -r "analyzeTicket" "$WEB_DIR" --include="*.js"; then
-            echo 'import { analyzeTicket } from "../../src/server-api/analyze-ticket";' >> "$WEB_DIR/assets/force.js"
-            echo 'window.analyzeTicket = analyzeTicket;' >> "$WEB_DIR/assets/force.js"
-          fi
-
-      - name: Create Capacitor config (iOS 17)
-        run: |
-          cat > capacitor.config.ts <<EOF
-          import type { CapacitorConfig } from '@capacitor/cli';
-          const config: CapacitorConfig = {
-            appId: 'com.jokerbaby.app',
-            appName: 'Jokerbaby',
-            webDir: '${{ steps.detect.outputs.web_dir }}',
-            ios: { deploymentTarget: '17.0' },
-            server: { allowNavigation: [ "*.winamax.fr", "*.winamax.com" ] }
-          };
-          export default config;
+          cat > capacitor.config.json <<EOF
+          {
+            "appId": "com.jokerbaby.app",
+            "appName": "Jokerbaby",
+            "webDir": "${WEB_DIR}",
+            "ios": {
+              "deploymentTarget": "17.0"
+            },
+            "server": {
+              "allowNavigation": ["*.winamax.fr", "*.winamax.com"]
+            }
+          }
           EOF
 
+      # ────────────────────────────────────────────
+      # Plateforme iOS
+      # ────────────────────────────────────────────
       - name: Add iOS platform
         run: |
           rm -rf ios
           npx cap add ios
 
-      - name: Force iOS 17 in Podfile & Xcode
+      - name: Verify Podfile exists
         run: |
-          sed -i '' 's/platform :ios, .*/platform :ios, "17.0"/' ios/App/Podfile
-          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g' ios/App/App.xcodeproj/project.pbxproj
+          if [ ! -f "ios/App/Podfile" ]; then
+            echo "❌ Podfile introuvable – nouvelle tentative avec --verbose"
+            rm -rf ios
+            npx cap add ios --verbose
+            if [ ! -f "ios/App/Podfile" ]; then
+              echo "❌ Podfile toujours absent – abandon."
+              exit 1
+            fi
+          fi
 
+      - name: Force iOS 17.0 deployment target
+        run: |
+          # Podfile
+          sed -i '' "s/platform :ios, .*/platform :ios, '17.0'/" ios/App/Podfile
+
+          # Xcode project
+          sed -i '' \
+            's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g' \
+            ios/App/App.xcodeproj/project.pbxproj
+
+      # ────────────────────────────────────────────
+      # CocoaPods
+      # ────────────────────────────────────────────
       - name: Install CocoaPods
         run: |
           cd ios/App
           pod install --repo-update
 
-      - name: Copy all assets to public
+      # ────────────────────────────────────────────
+      # Assets
+      # ────────────────────────────────────────────
+      - name: Copy web assets to iOS public folder
         run: |
+          WEB_DIR="${{ steps.detect.outputs.web_dir }}"
           TARGET="ios/App/App/public"
+
           rm -rf "$TARGET"
           mkdir -p "$TARGET"
-          cp -r ${{ steps.detect.outputs.web_dir }}/* "$TARGET/"
+
+          # Contenu du build web
+          cp -r "$WEB_DIR/." "$TARGET/"
+
+          # Dossier public racine
           if [ -d "public" ]; then
-            cp -rf public/* "$TARGET/" 2>/dev/null || true
+            cp -rf public/. "$TARGET/" 2>/dev/null || true
           fi
+
+          # Assets sources
           if [ -d "src/assets" ]; then
             mkdir -p "$TARGET/src/assets"
-            cp -rf src/assets/* "$TARGET/src/assets/" 2>/dev/null || true
+            cp -rf src/assets/. "$TARGET/src/assets/" 2>/dev/null || true
           fi
-          find . -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.svg" -o -iname "*.ttf" -o -iname "*.woff2" -o -iname "*.json" \) \
-            -not -path "./node_modules/*" -not -path "./dist/*" -not -path "./ios/*" -not -path "./.git/*" \
-            -exec cp --parents {} "$TARGET/" \; 2>/dev/null || true
-          cd "$TARGET"
-          for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
-            [ -f "../../../../$f" ] && cp -f "../../../../$f" . 2>/dev/null || true
+
+          # Fichiers statiques épars (images, fonts, json)
+          find . -type f \( \
+            -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \
+            -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.svg" \
+            -o -iname "*.ttf" -o -iname "*.woff2" -o -iname "*.json" \
+          \) \
+            ! -path "./node_modules/*" \
+            ! -path "./dist/*" \
+            ! -path "./ios/*" \
+            ! -path "./.git/*" \
+            | while read -r f; do
+                dest="$TARGET/$(dirname "$f")"
+                mkdir -p "$dest"
+                cp "$f" "$dest/" 2>/dev/null || true
+              done
+
+          # Manifeste & icônes racine
+          for f in manifest.webmanifest manifest.json \
+                   icon-192.png icon-512.png apple-touch-icon.png; do
+            [ -f "$f" ] && cp -f "$f" "$TARGET/" 2>/dev/null || true
           done
-          if ! grep -q "assets/" index.html; then
-            cp ${{ steps.detect.outputs.web_dir }}/index.html .
-          fi
+
           echo "✅ Taille du dossier public :"
           du -sh "$TARGET"
 
       - name: Capacitor copy
         run: npx cap copy ios
 
+      # ────────────────────────────────────────────
+      # Info.plist – ATS & permissions
+      # ────────────────────────────────────────────
       - name: Add ATS and permissions
         run: |
           PLIST="ios/App/App/Info.plist"
-          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" $PLIST
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
-          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Caméra requise'" $PLIST 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Photos requises'" $PLIST 2>/dev/null || true
 
+          # ATS
+          /usr/libexec/PlistBuddy -c \
+            "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c \
+            "Add :NSAppTransportSecurity dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c \
+            "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
+          /usr/libexec/PlistBuddy -c \
+            "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" "$PLIST"
+
+          # Permissions
+          /usr/libexec/PlistBuddy -c \
+            "Add :NSCameraUsageDescription string 'Caméra requise'" \
+            "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c \
+            "Add :NSPhotoLibraryUsageDescription string 'Photos requises'" \
+            "$PLIST" 2>/dev/null || true
+
+      # ────────────────────────────────────────────
+      # Build Xcode
+      # ────────────────────────────────────────────
       - name: Build archive
         run: |
-          cd ios
           rm -rf ~/Library/Developer/Xcode/DerivedData
-          xcodebuild -workspace App/App.xcworkspace \
-                     -scheme App \
-                     -configuration Release \
-                     -sdk iphoneos \
-                     -archivePath App.xcarchive \
-                     CODE_SIGNING_ALLOWED=NO \
-                     archive
 
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath ios/App.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            archive
+
+      # ────────────────────────────────────────────
+      # Packaging IPA
+      # ────────────────────────────────────────────
       - name: Create IPA
         run: |
           mkdir -p Payload
           cp -R ios/App.xcarchive/Products/Applications/App.app Payload/
-          zip -r app.ipa Payload
+          zip -qr app.ipa Payload/
 
+      # ────────────────────────────────────────────
+      # Upload
+      # ────────────────────────────────────────────
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
