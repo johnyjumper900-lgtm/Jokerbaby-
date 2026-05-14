@@ -1,4 +1,4 @@
-name: Build Full iOS App
+name: Build Full Project IPA
 on:
   push:
     branches: [ main ]
@@ -8,32 +8,35 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4[span_2](start_span)[span_2](end_span)
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 20[span_3](start_span)[span_3](end_span)
 
-      - name: Full NPM Install
+      - name: Install All Dependencies
         run: |
-          npm install --no-package-lock
-          npm install -D @capacitor/assets
+          # On installe tout le projet (src, supabase, etc.)
+          npm install --no-package-lock[span_4](start_span)[span_4](end_span)
+          npm install -D @capacitor/assets @capacitor/cli @capacitor/ios[span_5](start_span)[span_5](end_span)
 
-      - name: Build Web Project
-        run: npm run build
-
-      - name: Generate App Icons
+      - name: Build Web Application
         run: |
-          npx capacitor-assets generate --ios
+          # Compile tout ton code source (src/) vers le dossier dist/
+          npm run build[span_6](start_span)[span_6](end_span)
 
-      - name: Capacitor Sync
+      - name: Initialize Native iOS
         run: |
-          npx cap add ios || true
-          npx cap copy ios
-          npx cap sync ios
+          # Crée le dossier ios/ que tu n'as pas sur image_4.png
+          npx cap add ios || true[span_7](start_span)[span_7](end_span)
+          # Génère les icônes pour ne pas avoir une app vide
+          npx capacitor-assets generate --ios[span_8](start_span)[span_8](end_span)
+          # Aspire le dossier dist/ vers le projet iOS
+          npx cap copy ios[span_9](start_span)[span_9](end_span)
+          npx cap sync ios[span_10](start_span)[span_10](end_span)
 
-      - name: Build Native iOS (Unsigned)
+      - name: Xcode Compilation (Unsigned)
         run: |
           cd ios/App
           xcodebuild -workspace App.xcworkspace \
@@ -46,18 +49,18 @@ jobs:
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGN_IDENTITY="" \
                      AD_HOC_CODE_SIGNING_ALLOWED=YES \
-                     clean build
+                     clean build[span_11](start_span)[span_11](end_span)
 
           mkdir -p Payload
-          cp -r build-output/Release-iphoneos/App.app Payload/
+          cp -r build-output/Release-iphoneos/App.app Payload/[span_12](start_span)[span_12](end_span)
           
-          echo "Vérification du contenu final :"
-          du -sh Payload/App.app
+          echo "Taille réelle du projet aspiré :"
+          du -sh Payload/App.app[span_13](start_span)[span_13](end_span)
           
-          zip -r ../../App-unsigned.ipa Payload
+          zip -r ../../Full-Project.ipa Payload[span_14](start_span)[span_14](end_span)
 
-      - name: Upload IPA
+      - name: Upload Complete IPA
         uses: actions/upload-artifact@v4
         with:
-          name: full-project-ipa
-          path: App-unsigned.ipa
+          name: Full-IPA-Package
+          path: Full-Project.ipa[span_15](start_span)[span_15](end_span)
