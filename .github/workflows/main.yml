@@ -1,7 +1,9 @@
-name: Build iOS IPA (Final Fix)
+name: Build iOS IPA (Full Project – Final Fix)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main, master ]
 
 jobs:
   build-ios:
@@ -15,9 +17,23 @@ jobs:
         with:
           bun-version: latest
 
-      - run: bun install
-      - run: bun run build
+      # ------------------------------------------------------------
+      # Installer toutes les dépendances (y compris Capacitor)
+      # ------------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          bun install
+          bun add @capacitor/cli @capacitor/ios @capacitor/browser
 
+      # ------------------------------------------------------------
+      # Build web
+      # ------------------------------------------------------------
+      - name: Build web app
+        run: bun run build
+
+      # ------------------------------------------------------------
+      # Détection du dossier web généré
+      # ------------------------------------------------------------
       - name: Detect web folder
         id: detect
         run: |
@@ -26,9 +42,13 @@ jobs:
           elif [ -f "dist/index.html" ]; then
             echo "web_dir=dist" >> $GITHUB_OUTPUT
           else
+            echo "❌ No index.html found"
             exit 1
           fi
 
+      # ------------------------------------------------------------
+      # Force l'inclusion d'analyzeTicket
+      # ------------------------------------------------------------
       - name: Force analyzeTicket in bundle
         run: |
           WEB_DIR="${{ steps.detect.outputs.web_dir }}"
@@ -37,7 +57,10 @@ jobs:
             echo 'window.analyzeTicket = analyzeTicket;' >> "$WEB_DIR/assets/force.js"
           fi
 
-      - name: Create Capacitor config (iOS 17 – stable)
+      # ------------------------------------------------------------
+      # Création de la configuration Capacitor
+      # ------------------------------------------------------------
+      - name: Create capacitor.config.ts
         run: |
           cat > capacitor.config.ts <<EOF
           import type { CapacitorConfig } from '@capacitor/cli';
@@ -51,30 +74,40 @@ jobs:
           export default config;
           EOF
 
+      # ------------------------------------------------------------
+      # Ajout de la plateforme iOS (propre)
+      # ------------------------------------------------------------
       - name: Add iOS platform
         run: |
           rm -rf ios
           npx cap add ios
 
-      - name: Force iOS 17 in Podfile & Xcode
+      # ------------------------------------------------------------
+      # Forcer iOS 17.0 dans Podfile et Xcode project
+      # ------------------------------------------------------------
+      - name: Force iOS 17.0 in Podfile and Xcode project
         run: |
           sed -i '' 's/platform :ios, .*/platform :ios, "17.0"/' ios/App/Podfile
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 17.0/g' ios/App/App.xcodeproj/project.pbxproj
 
-      - name: pod install
+      # ------------------------------------------------------------
+      # Exécution de pod install (doit réussir)
+      # ------------------------------------------------------------
+      - name: Install CocoaPods
         run: |
           cd ios/App
           pod install --repo-update
 
       # ------------------------------------------------------------
-      # COPIE FORCÉE DE TOUTES LES RESSOURCES
+      # COPIE DE TOUTES LES RESSOURCES (création explicite du dossier)
       # ------------------------------------------------------------
-      - name: Copy all assets (public, src/assets, etc.)
+      - name: Copy all assets to public
         run: |
           TARGET="ios/App/App/public"
+          # Créer le dossier et le vider
           rm -rf "$TARGET"
           mkdir -p "$TARGET"
-          # 1. Web build
+          # 1. Web build (indispensable)
           cp -r ${{ steps.detect.outputs.web_dir }}/* "$TARGET/"
           # 2. Dossier public/
           if [ -d "public" ]; then
@@ -83,13 +116,13 @@ jobs:
           # 3. Dossier src/assets/
           if [ -d "src/assets" ]; then
             mkdir -p "$TARGET/src/assets"
-            cp -rf src/assets/* "$TARGET/src/assets/"
+            cp -rf src/assets/* "$TARGET/src/assets/" 2>/dev/null || true
           fi
-          # 4. Toutes les images, polices, fichiers JSON (peu importe où)
+          # 4. Tous les fichiers images, polices, JSON (où qu'ils soient)
           find . -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.svg" -o -iname "*.ttf" -o -iname "*.woff2" -o -iname "*.json" \) \
             -not -path "./node_modules/*" -not -path "./dist/*" -not -path "./ios/*" -not -path "./.git/*" \
             -exec cp --parents {} "$TARGET/" \; 2>/dev/null || true
-          # 5. Fichiers PWA
+          # 5. PWA files
           cd "$TARGET"
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
             [ -f "../../../../$f" ] && cp -f "../../../../$f" . 2>/dev/null || true
@@ -99,15 +132,21 @@ jobs:
             cp ${{ steps.detect.outputs.web_dir }}/index.html .
           fi
           # 7. Diagnostic final
-          echo "📊 Taille totale du dossier public :"
+          echo "✅ Taille du dossier public :"
           du -sh "$TARGET"
-          echo "📁 Les 10 plus gros fichiers :"
+          echo "🔍 Les 10 plus gros fichiers :"
           find "$TARGET" -type f -exec du -h {} + | sort -rh | head -10
 
+      # ------------------------------------------------------------
+      # Capacitor copy (finalisation sans pod install)
+      # ------------------------------------------------------------
       - name: Capacitor copy
         run: npx cap copy ios
 
-      - name: Add ATS & permissions
+      # ------------------------------------------------------------
+      # ATS et permissions
+      # ------------------------------------------------------------
+      - name: Add ATS and permissions
         run: |
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" $PLIST 2>/dev/null || true
@@ -117,6 +156,9 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 'Caméra requise'" $PLIST 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'Photos requises'" $PLIST 2>/dev/null || true
 
+      # ------------------------------------------------------------
+      # Build archive et IPA
+      # ------------------------------------------------------------
       - name: Build archive
         run: |
           cd ios
@@ -135,7 +177,8 @@ jobs:
           cp -R ios/App.xcarchive/Products/Applications/App.app Payload/
           zip -r app.ipa Payload
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
           name: ios-ipa-final
           path: app.ipa
