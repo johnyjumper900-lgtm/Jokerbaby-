@@ -85,26 +85,17 @@ jobs:
           rm -rf ios
           npx cap add ios
 
-      # --------------------------------------------------
-      # FORCER iOS 16.0 DANS LE PODFILE ET PROJET XCODE
-      # --------------------------------------------------
       - name: Set iOS deployment target to 16.0 in Podfile
         run: |
           PODFILE="ios/App/Podfile"
-          # Remplace la ligne platform
           sed -i '' "s/^platform :ios, .*/platform :ios, '16.0'/" "$PODFILE"
-          # Vérifie
           cat "$PODFILE"
 
       - name: Set deployment target in Xcode project
         run: |
           PROJ="ios/App/App.xcodeproj/project.pbxproj"
-          # Remplace toutes les occurrences de IPHONEOS_DEPLOYMENT_TARGET
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 16.0/g' "$PROJ"
 
-      # --------------------------------------------------
-      # Copie du build web et assets
-      # --------------------------------------------------
       - name: Copy web build to public
         run: |
           rm -rf ios/App/App/public
@@ -117,12 +108,16 @@ jobs:
             rsync -av --ignore-existing --exclude="index.html" public/ ios/App/App/public/
           fi
 
-      - name: Copy PWA files to root
+      # ---------- ÉTAPE CORRIGÉE ----------
+      - name: Copy PWA files
         run: |
           cd ios/App/App/public
           for f in manifest.webmanifest manifest.json icon-192.png icon-512.png apple-touch-icon.png; do
-            [ -f "../../../../$f" ] && cp -n "../../../../$f" .
+            if [ -f "../../../../$f" ]; then
+              cp -n "../../../../$f" .
+            fi
           done
+      # -----------------------------------
 
       - name: Restore correct index.html if needed
         run: |
@@ -135,9 +130,6 @@ jobs:
             exit 1
           fi
 
-      # --------------------------------------------------
-      # Génération icônes (optionnel)
-      # --------------------------------------------------
       - name: Prepare icon
         run: |
           mkdir -p assets
@@ -151,9 +143,6 @@ jobs:
           npm install -g @capacitor/assets
           npx capacitor-assets generate --ios || echo "Génération icônes ignorée"
 
-      # --------------------------------------------------
-      # Permissions et ATS pour Winamax
-      # --------------------------------------------------
       - name: Add permissions and ATS
         run: |
           PLIST="ios/App/App/Info.plist"
@@ -166,9 +155,6 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" $PLIST
           /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoadsInWebContent bool true" $PLIST
 
-      # --------------------------------------------------
-      # Capacitor sync et pod install
-      # --------------------------------------------------
       - name: Capacitor sync
         run: npx cap sync ios
 
@@ -177,9 +163,6 @@ jobs:
           cd ios/App
           pod install --repo-update
 
-      # --------------------------------------------------
-      # Build archive
-      # --------------------------------------------------
       - name: Build archive
         run: |
           cd ios
